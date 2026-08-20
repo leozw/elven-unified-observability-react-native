@@ -66,9 +66,4 @@ RCT_EXPORT_MODULE()
     return std::make_shared<facebook::react::NativeElvenUnifiedObservabilityReactNativeSpecJSI>(params);
 }
 
-+ (NSString *)moduleName
-{
-  return @"ElvenUnifiedObservabilityReactNative";
-}
-
 @end

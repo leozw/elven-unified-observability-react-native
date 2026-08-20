@@ -16,7 +16,7 @@ This file records the evidence for release candidate `0.2.0` on 2026-08-20. Stat
 | Bundle budgets                    | `yarn size`                          | Passed; see `PERFORMANCE.md`                                                                               |
 | Workflow syntax                   | `actionlint .github/workflows/*.yml` | Passed                                                                                                     |
 
-An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.2.0`. The inspected tarball contained 196 files, was 184.1 kB compressed and 744.6 kB unpacked, included the Apple privacy manifest and customer documentation, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
+An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.2.0`. The inspected tarball contained 196 files, was 184.0 kB compressed and 744.6 kB unpacked, included the Apple privacy manifest and customer documentation, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
 
 A source and publish-surface scan found no JWT, npm/GitHub token, AWS access key, private key, `.env`, certificate, provisioning profile, or signing key. The vendored Yarn binary was excluded from entropy-style text matching and is covered by immutable repository review.
 
