@@ -138,7 +138,7 @@ Synchronous native events can use the current context directly. Asynchronous nat
 - Unhandled rejections use the event listener API when present and chain the existing fallback handler otherwise.
 - JS AppState and native lifecycle signals are deduplicated by semantic ownership rather than exported through separate pipelines.
 - Android uncaught exceptions are atomically persisted and delivered on the next launch before the platform's previous crash handler runs.
-- iOS uses MetricKit for system-supported crash, hang, launch, and performance diagnostics. Delivery can be delayed and must be validated on a real device.
+- iOS uses MetricKit for system-supported crash, hang, launch, and performance diagnostics. Delivery can be delayed and must be validated on a real device. Android reads the OS process-start clock; iOS startup timing begins at native SDK image load because iOS exposes no supported exact process-start API to third-party apps.
 
 ## Failure model
 

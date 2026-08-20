@@ -3,7 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <TargetConditionals.h>
 #import <UIKit/UIKit.h>
-#import <libproc.h>
+#import <sys/time.h>
 #import <sys/utsname.h>
 
 #if __has_include(<MetricKit/MetricKit.h>)
@@ -21,6 +21,17 @@ static const NSTimeInterval ELVAnrThresholdSeconds = 5.0;
 static const NSTimeInterval ELVFrameReportIntervalSeconds = 15.0;
 static const double ELVSlowFrameMillis = 32.0;
 static const double ELVFrozenFrameMillis = 700.0;
+static NSTimeInterval ELVNativeImageLoadUnixMillis = 0;
+
+__attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
+{
+  struct timeval now;
+  if (gettimeofday(&now, NULL) == 0) {
+    ELVNativeImageLoadUnixMillis =
+        ((NSTimeInterval)now.tv_sec * 1000.0) +
+        ((NSTimeInterval)now.tv_usec / 1000.0);
+  }
+}
 
 #if ELVEN_HAS_METRICKIT
 @interface ElvenNativeRuntime () <MXMetricManagerSubscriber>
@@ -743,13 +754,9 @@ static const double ELVFrozenFrameMillis = 700.0;
 
 - (NSTimeInterval)readProcessStartUnixMillis
 {
-  struct proc_bsdinfo info;
-  int size = proc_pidinfo(getpid(), PROC_PIDTBSDINFO, 0, &info, sizeof(info));
-  if (size == sizeof(info)) {
-    return ((NSTimeInterval)info.pbi_start_tvsec * 1000.0) +
-        ((NSTimeInterval)info.pbi_start_tvusec / 1000.0);
-  }
-  return [NSDate date].timeIntervalSince1970 * 1000.0;
+  return ELVNativeImageLoadUnixMillis > 0 ?
+      ELVNativeImageLoadUnixMillis :
+      [NSDate date].timeIntervalSince1970 * 1000.0;
 }
 
 - (NSString *)machineIdentifier

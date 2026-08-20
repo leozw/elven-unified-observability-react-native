@@ -95,7 +95,7 @@ npx pod-install
 npx react-native run-ios
 ```
 
-The pod inherits the minimum iOS version from the host React Native line. Native diagnostics use MetricKit and app-private protected persistence; no unsafe crash signal handler or swizzling dependency is added.
+The pod inherits the minimum iOS version from the host React Native line. Native diagnostics use MetricKit and app-private protected persistence; no unsafe crash signal handler or swizzling dependency is added. Android startup timing uses the OS process-start clock, while iOS measures from native SDK image load because third-party iOS apps have no supported exact process-start API.
 
 iOS crash and performance reports can arrive after the originating event. MetricKit behavior must be validated on a real device for production acceptance.
 

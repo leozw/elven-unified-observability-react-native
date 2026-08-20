@@ -180,7 +180,8 @@ jobs:
         run: node .yarn/releases/yarn-4.11.0.cjs example expo prebuild --platform ios --no-install
 
       - name: Install CocoaPods
-        run: pod install --project-directory=example/ios
+        working-directory: example/ios
+        run: pod install
 
       - name: Build iOS release simulator
         run: node .yarn/releases/yarn-4.11.0.cjs example build:ios
