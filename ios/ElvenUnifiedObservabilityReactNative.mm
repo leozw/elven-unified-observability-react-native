@@ -3,6 +3,8 @@
 
 @implementation ElvenUnifiedObservabilityReactNative
 
+RCT_EXPORT_MODULE()
+
 - (void)initialize:(NSString *)configurationJson
            resolve:(RCTPromiseResolveBlock)resolve
             reject:(RCTPromiseRejectBlock)reject
@@ -62,11 +64,6 @@
     (const facebook::react::ObjCTurboModule::InitParams &)params
 {
     return std::make_shared<facebook::react::NativeElvenUnifiedObservabilityReactNativeSpecJSI>(params);
-}
-
-+ (NSString *)moduleName
-{
-  return @"ElvenUnifiedObservabilityReactNative";
 }
 
 @end

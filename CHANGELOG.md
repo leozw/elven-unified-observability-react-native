@@ -2,6 +2,18 @@
 
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and Semantic Versioning.
 
+## [0.2.0] - 2026-08-20
+
+### Added
+
+- Extended compatibility lane for React Native 0.79.7 with React 19.0, Hermes, and the New Architecture.
+- External-package Android and iOS Release gates for the React Native 0.79.7 consumer template.
+- Backward-compatible iOS module registration without changing the New Architecture path.
+
+### Changed
+
+- Narrowed the peer declaration into explicitly tested React Native ranges instead of implying support for unvalidated intermediate minors.
+
 ## [0.1.0] - 2026-08-20
 
 ### Added

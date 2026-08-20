@@ -1,6 +1,6 @@
 # Validation evidence
 
-This file records the evidence for release candidate `0.1.0` on 2026-08-20. Static, emulator, real-device, and backend proof are intentionally reported separately.
+This file records the evidence for release candidate `0.2.0` on 2026-08-20. Static, emulator, real-device, and backend proof are intentionally reported separately.
 
 ## Static and local JavaScript
 
@@ -16,7 +16,7 @@ This file records the evidence for release candidate `0.1.0` on 2026-08-20. Stat
 | Bundle budgets                    | `yarn size`                          | Passed; see `PERFORMANCE.md`                                                                               |
 | Workflow syntax                   | `actionlint .github/workflows/*.yml` | Passed                                                                                                     |
 
-An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.1.0`. The inspected tarball contained 195 files, was 173.9 kB compressed and 714.4 kB unpacked, included the Apple privacy manifest, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
+An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.2.0`. The inspected tarball contained 196 files, was 184.0 kB compressed and 744.6 kB unpacked, included the Apple privacy manifest and customer documentation, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
 
 A source and publish-surface scan found no JWT, npm/GitHub token, AWS access key, private key, `.env`, certificate, provisioning profile, or signing key. The vendored Yarn binary was excluded from entropy-style text matching and is covered by immutable repository review.
 
@@ -35,6 +35,23 @@ A source and publish-surface scan found no JWT, npm/GitHub token, AWS access key
 | Apple privacy manifest                        | `plutil` passed locally; CI verifies the pod resource bundle inside both Expo and bare Release apps                              |
 
 The latest complete green release matrix is [GitHub Actions run 32403735838](https://github.com/leozw/elven-unified-observability-react-native/actions/runs/32403735838). All seven jobs passed: quality/package, Collector OTLP smoke, web fallback, Expo Android/iOS Release, and bare RN 0.87 Android/iOS Release. Both iOS jobs also located and linted the bundled SDK privacy manifest in their Release products. The tag workflow reruns this reusable matrix before publication.
+
+## React Native 0.79.7 extended compatibility
+
+This evidence applies to release candidate `0.2.0`. The previous `0.1.0` peer range rejects React 19.0 used by React Native 0.79.7.
+
+| Gate                                              | Result                                                                                                                |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Standard tarball install                          | Passed without `--force` or `--legacy-peer-deps`; npm resolved React 19.0.0 and React Native 0.79.7                   |
+| TypeScript and public API                         | Passed in an external RN 0.79.7 application                                                                           |
+| Autolinking                                       | Passed; Android package and iOS podspec were discovered                                                               |
+| Android New Architecture Release                  | Passed with Hermes, Metro 0.82.5, Codegen, four Android ABIs, lint vital, and APK packaging                           |
+| Android New Architecture runtime                  | Passed on an Android 16 emulator; cold Release launch completed and `nativeBridgeAvailable` reported `true`           |
+| Android Legacy Architecture exploratory runtime   | Build and Release runtime passed with `nativeBridgeAvailable` equal to `true`; this mode remains outside the contract |
+| iOS New Architecture Release                      | Covered by the dedicated macOS 15 / Xcode 16.4 external-tarball CI gate                                               |
+| Physical Android/iOS and customer Collector proof | Not executed                                                                                                          |
+
+React Native 0.79 is unsupported upstream. The extended range is therefore pinned to final patch 0.79.7 and excludes 0.80-0.85 rather than implying untested compatibility.
 
 ## Runtime proof
 

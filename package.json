@@ -1,6 +1,6 @@
 {
   "name": "elven-unified-observability-react-native",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Production-grade unified observability for React Native",
   "main": "./lib/module/index.js",
@@ -124,8 +124,8 @@
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
-    "react": ">=19.1.0 <20",
-    "react-native": ">=0.86.0 <0.88.0"
+    "react": ">=19.0.0 <20",
+    "react-native": ">=0.79.7 <0.80.0 || >=0.86.0 <0.88.0"
   },
   "engines": {
     "node": "^22.13.0 || >=24.3.0"

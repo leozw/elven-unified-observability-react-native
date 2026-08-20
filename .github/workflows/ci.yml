@@ -157,6 +157,59 @@ jobs:
           retention-days: 14
           path: ${{ github.workspace }}/.bare-validation/android/app/build/outputs/apk/release/*.apk
 
+  bare-rn-079-android-release:
+    name: Bare RN 0.79.7 Android release
+    runs-on: ubuntu-latest
+    env:
+      BARE_APP_DIR: ${{ github.workspace }}/.bare-rn-079-validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Create RN 0.79.7 consumer from the packed SDK
+        shell: bash
+        run: |
+          node .yarn/releases/yarn-4.11.0.cjs build
+          package_tarball="$(npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP")"
+          npx --yes @react-native-community/cli@18.0.0 init ElvenRn079Validation \
+            --version 0.79.7 \
+            --pm npm \
+            --directory "$BARE_APP_DIR" \
+            --skip-git-init \
+            --install-pods false
+          npm install --prefix "$BARE_APP_DIR" --ignore-scripts --save-exact "$RUNNER_TEMP/$package_tarball"
+          cp scripts/fixtures/bare-App.tsx "$BARE_APP_DIR/App.tsx"
+
+      - name: Verify RN 0.79.7 New Architecture
+        run: grep -q '^newArchEnabled=true$' "$BARE_APP_DIR/android/gradle.properties"
+
+      - name: Typecheck RN 0.79.7 consumer
+        working-directory: ${{ github.workspace }}/.bare-rn-079-validation
+        run: npx tsc --noEmit
+
+      - name: Build RN 0.79.7 Android release
+        working-directory: ${{ github.workspace }}/.bare-rn-079-validation
+        run: NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
+
+      - name: Upload RN 0.79.7 Android release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bare-rn-079-android-release
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ github.workspace }}/.bare-rn-079-validation/android/app/build/outputs/apk/release/*.apk
+
   ios-release:
     name: Expo 57 iOS release simulator
     runs-on: macos-26
@@ -275,6 +328,77 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: ${{ github.workspace }}/.bare-validation/ios/build/Build/Products/Release-iphonesimulator/*.app
+
+  bare-rn-079-ios-release:
+    name: Bare RN 0.79.7 iOS release simulator
+    runs-on: macos-15
+    env:
+      BARE_APP_DIR: ${{ github.workspace }}/.bare-rn-079-validation
+      RCT_NEW_ARCH_ENABLED: '1'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 16.4
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Create RN 0.79.7 consumer from the packed SDK
+        shell: bash
+        run: |
+          node .yarn/releases/yarn-4.11.0.cjs build
+          package_tarball="$(npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP")"
+          npx --yes @react-native-community/cli@18.0.0 init ElvenRn079Validation \
+            --version 0.79.7 \
+            --pm npm \
+            --directory "$BARE_APP_DIR" \
+            --skip-git-init \
+            --install-pods false
+          npm install --prefix "$BARE_APP_DIR" --ignore-scripts --save-exact "$RUNNER_TEMP/$package_tarball"
+          cp scripts/fixtures/bare-App.tsx "$BARE_APP_DIR/App.tsx"
+
+      - name: Typecheck RN 0.79.7 consumer
+        working-directory: ${{ github.workspace }}/.bare-rn-079-validation
+        run: npx tsc --noEmit
+
+      - name: Install RN 0.79.7 CocoaPods
+        working-directory: ${{ github.workspace }}/.bare-rn-079-validation/ios
+        run: pod install
+
+      - name: Build RN 0.79.7 iOS release simulator
+        working-directory: ${{ github.workspace }}/.bare-rn-079-validation
+        run: >-
+          xcodebuild
+          -workspace ios/ElvenRn079Validation.xcworkspace
+          -scheme ElvenRn079Validation
+          -configuration Release
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath ios/build
+          CODE_SIGNING_ALLOWED=NO
+          ONLY_ACTIVE_ARCH=YES
+          -quiet
+
+      - name: Verify bundled SDK privacy manifest
+        shell: bash
+        run: |
+          manifest="$(find "$BARE_APP_DIR/ios/build/Build/Products/Release-iphonesimulator" \
+            -path '*/ElvenUnifiedObservabilityReactNativePrivacy.bundle/PrivacyInfo.xcprivacy' \
+            -print -quit)"
+          test -n "$manifest"
+          plutil -lint "$manifest"
+
+      - name: Upload RN 0.79.7 iOS release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bare-rn-079-ios-release-simulator
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ github.workspace }}/.bare-rn-079-validation/ios/build/Build/Products/Release-iphonesimulator/*.app
 
   web-release:
     name: Expo 57 web fallback
