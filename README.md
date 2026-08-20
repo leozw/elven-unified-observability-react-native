@@ -2,7 +2,7 @@
 
 Production-oriented logs, metrics, traces, errors, network telemetry, app lifecycle, and mobile performance through one correlated OpenTelemetry pipeline.
 
-The SDK targets modern React Native with Hermes and the New Architecture. It exports standard OTLP/HTTP JSON to a Collector, keeps backend credentials out of the mobile app, bounds every queue and payload, and fails open when observability is unavailable.
+The SDK targets modern React Native with Hermes and the New Architecture, with an isolated compatibility lane for React Native 0.79.7. It exports standard OTLP/HTTP JSON to a Collector, keeps backend credentials out of the mobile app, bounds every queue and payload, and fails open when observability is unavailable.
 
 ## What it captures
 
@@ -20,6 +20,7 @@ Logs and spans share trace/span IDs. Metrics use bounded OTLP exemplars for trac
 ## Compatibility
 
 - React Native `0.86.x` and `0.87.x`;
+- React Native `0.79.7` through the extended compatibility lane;
 - React `19.x`;
 - New Architecture and Hermes;
 - Android API 24+;
@@ -27,7 +28,7 @@ Logs and spans share trace/span IDs. Metrics use bounded OTLP exemplars for trac
 - Expo SDK 57 Development Builds, prebuild/CNG, EAS Build, and bare projects;
 - Expo Go with a safe JS-only fallback.
 
-Expo SDK 57 itself requires iOS 16.4+ and its documented toolchain. Older React Native versions, Legacy Architecture, JavaScriptCore, Windows, macOS, visionOS, and tvOS are not in the declared support contract. See [COMPATIBILITY.md](COMPATIBILITY.md) for the evidence matrix and exact prerequisites.
+Expo SDK 57 itself requires iOS 16.4+ and its documented toolchain. React Native 0.79 is no longer maintained upstream; Elven compatibility does not replace framework security or maintenance updates, so customers on 0.79.7 need an upgrade plan. Versions 0.79.0-0.79.6 and 0.80-0.85, the Legacy Architecture, JavaScriptCore, Windows, macOS, visionOS, and tvOS are not in the declared support contract. See [COMPATIBILITY.md](COMPATIBILITY.md) for the evidence matrix and exact prerequisites.
 
 ## Install
 

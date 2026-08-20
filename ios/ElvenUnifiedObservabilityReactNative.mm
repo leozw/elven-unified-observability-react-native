@@ -3,6 +3,8 @@
 
 @implementation ElvenUnifiedObservabilityReactNative
 
+RCT_EXPORT_MODULE()
+
 - (void)initialize:(NSString *)configurationJson
            resolve:(RCTPromiseResolveBlock)resolve
             reject:(RCTPromiseRejectBlock)reject
