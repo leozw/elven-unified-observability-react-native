@@ -500,7 +500,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 {
   self.lastHeartbeat = CACurrentMediaTime();
   self.hangReported = NO;
-  __weak typeof(self) weakSelf = self;
+  __weak ElvenNativeRuntime *weakSelf = self;
   self.heartbeatTimer = [NSTimer
       scheduledTimerWithTimeInterval:0.5
                              repeats:YES
