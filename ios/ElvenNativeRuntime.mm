@@ -47,17 +47,17 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 @property(nonatomic, strong, nullable) CADisplayLink *displayLink;
 @property(nonatomic, copy, nullable) NSString *traceId;
 @property(nonatomic, copy, nullable) NSString *spanId;
-@property(nonatomic, assign) BOOL diagnosticsEnabled;
-@property(nonatomic, assign) BOOL active;
-@property(nonatomic, assign) BOOL hangReported;
+@property(atomic, assign) BOOL diagnosticsEnabled;
+@property(atomic, assign) BOOL active;
+@property(atomic, assign) BOOL hangReported;
 @property(nonatomic, assign) BOOL metricKitRegistered;
-@property(nonatomic, assign) BOOL captureMetricKitDiagnostics;
-@property(nonatomic, assign) BOOL captureMetricKitMetrics;
-@property(nonatomic, assign) BOOL initialized;
-@property(nonatomic, assign) NSUInteger maxEventQueueSize;
-@property(nonatomic, assign) NSUInteger generation;
+@property(atomic, assign) BOOL captureMetricKitDiagnostics;
+@property(atomic, assign) BOOL captureMetricKitMetrics;
+@property(atomic, assign) BOOL initialized;
+@property(atomic, assign) NSUInteger maxEventQueueSize;
+@property(atomic, assign) NSUInteger generation;
 @property(nonatomic, assign) NSTimeInterval processStartUnixMillis;
-@property(nonatomic, assign) NSTimeInterval lastHeartbeat;
+@property(atomic, assign) NSTimeInterval lastHeartbeat;
 @property(nonatomic, assign) CFTimeInterval lastFrameTimestamp;
 @property(nonatomic, assign) CFTimeInterval framePeriodStartedAt;
 @property(nonatomic, assign) NSTimeInterval framePeriodStartedUnixMillis;
@@ -222,13 +222,13 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
       return;
     }
     if (captureLifecycle) {
-      [self startLifecycle];
+      [self startLifecycleForGeneration:generation];
     }
     if (captureFrames) {
       [self startFrameMonitor];
     }
     if (captureAnr) {
-      [self startAnrMonitor];
+      [self startAnrMonitorForGeneration:generation];
     }
     if (self.captureMetricKitDiagnostics || self.captureMetricKitMetrics) {
       [self startMetricKit];
@@ -305,6 +305,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 {
   self.initialized = NO;
   self.generation += 1;
+  NSUInteger shutdownGeneration = self.generation;
   void (^cleanup)(void) = ^{
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
     for (id token in self.notificationTokens) {
@@ -325,8 +326,10 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
       self.metricKitRegistered = NO;
     }
 #endif
-    self.captureMetricKitDiagnostics = NO;
-    self.captureMetricKitMetrics = NO;
+    if (self.generation == shutdownGeneration) {
+      self.captureMetricKitDiagnostics = NO;
+      self.captureMetricKitMetrics = NO;
+    }
     self.lastFrameTimestamp = 0;
     self.frameCount = 0;
     self.slowFrameCount = 0;
@@ -360,7 +363,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   }
 }
 
-- (void)startLifecycle
+- (void)startLifecycleForGeneration:(NSUInteger)generation
 {
   NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
   id activeToken = [center
@@ -368,6 +371,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
                   object:nil
                    queue:[NSOperationQueue mainQueue]
               usingBlock:^(__unused NSNotification *notification) {
+    if (![self isGenerationActive:generation]) return;
     BOOL wasInactive = !self.active;
     self.active = YES;
     if (wasInactive) {
@@ -388,6 +392,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
                   object:nil
                    queue:[NSOperationQueue mainQueue]
               usingBlock:^(__unused NSNotification *notification) {
+    if (![self isGenerationActive:generation]) return;
     self.active = NO;
     [self flushFrameMetrics];
     self.displayLink.paused = YES;
@@ -402,6 +407,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
                   object:nil
                    queue:[NSOperationQueue mainQueue]
               usingBlock:^(__unused NSNotification *notification) {
+    if (![self isGenerationActive:generation]) return;
     self.active = NO;
     [self recordEventWithType:@"lifecycle"
                          name:@"app.background"
@@ -414,6 +420,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
                   object:nil
                    queue:[NSOperationQueue mainQueue]
               usingBlock:^(__unused NSNotification *notification) {
+    if (![self isGenerationActive:generation]) return;
     [self recordEventWithType:@"memory"
                          name:@"app.memory.warning"
                durationMillis:nil
@@ -437,6 +444,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 
 - (void)onDisplayLink:(CADisplayLink *)displayLink
 {
+  if (!self.initialized || displayLink != self.displayLink) return;
   if (self.lastFrameTimestamp == 0) {
     if (!self.firstFrameRecorded) {
       self.firstFrameRecorded = YES;
@@ -488,15 +496,24 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   self.maximumFrameMillis = 0;
 }
 
-- (void)startAnrMonitor
+- (void)startAnrMonitorForGeneration:(NSUInteger)generation
 {
   self.lastHeartbeat = CACurrentMediaTime();
   self.hangReported = NO;
-  self.heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:0.5
-                                                        target:self
-                                                      selector:@selector(onHeartbeat)
-                                                      userInfo:nil
-                                                       repeats:YES];
+  __weak typeof(self) weakSelf = self;
+  self.heartbeatTimer = [NSTimer
+      scheduledTimerWithTimeInterval:0.5
+                             repeats:YES
+                               block:^(NSTimer *timer) {
+    ElvenNativeRuntime *strongSelf = weakSelf;
+    if (strongSelf == nil ||
+        timer != strongSelf.heartbeatTimer ||
+        ![strongSelf isGenerationActive:generation]) {
+      return;
+    }
+    strongSelf.lastHeartbeat = CACurrentMediaTime();
+    strongSelf.hangReported = NO;
+  }];
   dispatch_queue_t queue = dispatch_queue_create(
       "works.elven.observability.anr",
       DISPATCH_QUEUE_SERIAL);
@@ -511,6 +528,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
       NSEC_PER_SEC,
       NSEC_PER_MSEC * 100);
   dispatch_source_set_event_handler(self.watchdog, ^{
+    if (![self isGenerationActive:generation]) return;
     NSTimeInterval blocked = CACurrentMediaTime() - self.lastHeartbeat;
     if (self.active && blocked >= ELVAnrThresholdSeconds && !self.hangReported) {
       self.hangReported = YES;
@@ -524,12 +542,6 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   dispatch_resume(self.watchdog);
 }
 
-- (void)onHeartbeat
-{
-  self.lastHeartbeat = CACurrentMediaTime();
-  self.hangReported = NO;
-}
-
 - (void)startMetricKit
 {
 #if ELVEN_HAS_METRICKIT
@@ -538,6 +550,11 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
     self.metricKitRegistered = YES;
   }
 #endif
+}
+
+- (BOOL)isGenerationActive:(NSUInteger)generation
+{
+  return self.initialized && generation == self.generation;
 }
 
 #if ELVEN_HAS_METRICKIT

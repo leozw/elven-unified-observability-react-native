@@ -186,6 +186,15 @@ jobs:
       - name: Build iOS release simulator
         run: node .yarn/releases/yarn-4.11.0.cjs example build:ios
 
+      - name: Verify bundled SDK privacy manifest
+        shell: bash
+        run: |
+          manifest="$(find example/ios/build/Build/Products/Release-iphonesimulator \
+            -path '*/ElvenUnifiedObservabilityReactNativePrivacy.bundle/PrivacyInfo.xcprivacy' \
+            -print -quit)"
+          test -n "$manifest"
+          plutil -lint "$manifest"
+
       - name: Upload iOS release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -249,6 +258,15 @@ jobs:
           CODE_SIGNING_ALLOWED=NO
           ONLY_ACTIVE_ARCH=YES
           -quiet
+
+      - name: Verify bundled SDK privacy manifest
+        shell: bash
+        run: |
+          manifest="$(find "$BARE_APP_DIR/ios/build/Build/Products/Release-iphonesimulator" \
+            -path '*/ElvenUnifiedObservabilityReactNativePrivacy.bundle/PrivacyInfo.xcprivacy' \
+            -print -quit)"
+          test -n "$manifest"
+          plutil -lint "$manifest"
 
       - name: Upload bare iOS release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

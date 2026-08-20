@@ -2,17 +2,19 @@
 
 ## Supported application targets
 
-| Target                                        | SDK behavior        | Native capabilities                                                               | Evidence gate                                                                  |
-| --------------------------------------------- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| React Native 0.86.x, New Architecture, Hermes | Release candidate   | Android and iOS                                                                   | Expo 57 Android Release/runtime; iOS Release is a mandatory CI gate            |
-| React Native 0.87.x, New Architecture, Hermes | Release candidate   | Android and iOS                                                                   | External tarball bare Android Release; bare iOS Release is a mandatory CI gate |
-| Expo SDK 57 Development Build / EAS Build     | Release candidate   | Android and iOS after rebuild                                                     | Executable Expo Android runtime; iOS Release is a mandatory CI gate            |
-| Expo SDK 57 prebuild/CNG                      | Full                | Autolinked by prebuild                                                            | Android and iOS `expo prebuild` validation                                     |
-| Expo Go                                       | JS-only fallback    | Native crash, ANR/hang, frame, device, and durable native storage are unavailable | JS fallback tests; native support is not claimed                               |
-| Bare React Native                             | Release candidate   | Autolinking and Codegen                                                           | RN 0.87 Android Release passed; Android/iOS bare jobs gate publication         |
-| React Native Web                              | Best-effort JS path | None                                                                              | Demo web build only; not part of the mobile support contract                   |
+| Target                                        | SDK behavior        | Native capabilities                                                               | Evidence gate                                                |
+| --------------------------------------------- | ------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| React Native 0.86.x, New Architecture, Hermes | Supported           | Android and iOS                                                                   | Expo 57 Android runtime plus Android/iOS Release CI          |
+| React Native 0.87.x, New Architecture, Hermes | Supported           | Android and iOS                                                                   | External-tarball bare Android/iOS Release CI                 |
+| Expo SDK 57 Development Build / EAS Build     | Supported           | Android and iOS after rebuild                                                     | Executable Expo Android runtime plus Android/iOS Release CI  |
+| Expo SDK 57 prebuild/CNG                      | Full                | Autolinked by prebuild                                                            | Android and iOS `expo prebuild` validation                   |
+| Expo Go                                       | JS-only fallback    | Native crash, ANR/hang, frame, device, and durable native storage are unavailable | JS fallback tests; native support is not claimed             |
+| Bare React Native                             | Supported           | Autolinking and Codegen                                                           | RN 0.87 external-tarball Android/iOS Release CI              |
+| React Native Web                              | Best-effort JS path | None                                                                              | Demo web build only; not part of the mobile support contract |
 
 The npm peer range is deliberately limited to `react-native >=0.86.0 <0.88.0` and `react >=19.1.0 <20`. Older React Native lines, the Legacy Architecture, JavaScriptCore, Windows, macOS, visionOS, and tvOS are not declared supported.
+
+`Supported` means the package, autolinking, Codegen, and native Release build contract passed in the declared matrix. Android runtime and correlated OTLP delivery were also exercised. iOS simulator interaction, physical-device behavior, and MetricKit delivery remain separate acceptance gates and are not implied by compilation.
 
 ## Platform prerequisites
 
@@ -40,7 +42,7 @@ The npm peer range is deliberately limited to `react-native >=0.86.0 <0.88.0` an
 | Process start and first frame              | Yes                | Yes                      | No                     |
 | Slow/frozen frame summary                  | Yes                | Yes                      | No                     |
 | Main-thread ANR/hang watchdog              | Yes                | Yes                      | No                     |
-| Native crash diagnostics                   | Next launch        | MetricKit delivery       | No                     |
+| Native crash diagnostics                   | JVM, next launch   | MetricKit delivery       | No                     |
 | Native memory pressure                     | Yes                | Yes                      | No                     |
 | Durable private queue                      | Yes                | Yes                      | Memory only            |
 | Custom native module correlation           | Kotlin/Java helper | Objective-C/Swift helper | No                     |

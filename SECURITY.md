@@ -45,6 +45,12 @@ ElvenObservability.context.setSession(null);
 ElvenObservability.context.setBusinessContext(null);
 ```
 
+## Store privacy declarations
+
+The iOS pod bundles `PrivacyInfo.xcprivacy`. It declares no tracking domains and conservatively reports optional linked user ID, product interaction, crash, performance, and other diagnostic data for app functionality/analytics. It also declares system boot time reason `35F9.1`; the SDK uses monotonic elapsed time for frame, hang, and duration measurements and never exports the device's boot timestamp.
+
+The static manifest describes the SDK's possible built-in behavior, so it remains conservative when an application disables a signal or never calls `setUser`. Before release, generate the host application's Xcode privacy report and align App Store privacy details, Google Play Data safety, consent, retention, deletion, and customer-specific attributes with the actual configuration and Collector pipeline. The SDK cannot make those legal or product decisions for the host app.
+
 ## Custom redaction
 
 ```ts

@@ -16,7 +16,7 @@ This file records the evidence for release candidate `0.1.0` on 2026-08-20. Stat
 | Bundle budgets                    | `yarn size`                          | Passed; see `PERFORMANCE.md`                                                                               |
 | Workflow syntax                   | `actionlint .github/workflows/*.yml` | Passed                                                                                                     |
 
-An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.1.0`. The inspected tarball contained 194 files, was 171.5 kB compressed and 704.9 kB unpacked, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
+An actual npm tarball was created with scripts disabled and installed into a clean external consumer. Its manifest/exports resolved, its public import bundled successfully with esbuild, and `npm ls` resolved version `0.1.0`. The inspected tarball contained 195 files, was 173.6 kB compressed and 713.5 kB unpacked, included the Apple privacy manifest, and excluded tests, fixtures, examples, local artifacts, environment files, and credentials.
 
 A source and publish-surface scan found no JWT, npm/GitHub token, AWS access key, private key, `.env`, certificate, provisioning profile, or signing key. The vendored Yarn binary was excluded from entropy-style text matching and is covered by immutable repository review.
 
@@ -30,10 +30,11 @@ A source and publish-surface scan found no JWT, npm/GitHub token, AWS access key
 | Expo Android Release                          | Passed with New Architecture, Hermes, Codegen, Kotlin/Java, CMake, lint vital, and APK packaging                                 |
 | Bare RN 0.87 Android Release from tarball     | Passed: external install, TypeScript, autolinking, Codegen, Metro 0.87, Hermes, four Android ABIs, lint vital, and APK packaging |
 | Expo web production export                    | Passed; JS-only fallback bundled                                                                                                 |
-| Expo iOS Release simulator                    | Not available locally: this host has Command Line Tools only and no CocoaPods                                                    |
-| Bare RN 0.87 iOS Release simulator            | Not available locally for the same reason                                                                                        |
+| Expo iOS Release simulator                    | Passed on GitHub-hosted macOS with Xcode 26.4.1: prebuild, CocoaPods, Hermes, Codegen, native SDK, and Release simulator build   |
+| Bare RN 0.87 iOS Release simulator            | Passed from the packed external SDK: install, TypeScript, CocoaPods, Codegen, native SDK, and Release simulator build            |
+| Apple privacy manifest                        | `plutil` passed locally; CI verifies the pod resource bundle inside both Expo and bare Release apps                              |
 
-The reusable CI workflow makes both Expo and bare RN 0.87 Android/iOS Release jobs prerequisites of tag publication. Local Android proof does not stand in for the pending macOS/Xcode CI result.
+The first complete green release matrix is [GitHub Actions run 32401045227](https://github.com/leozw/elven-unified-observability-react-native/actions/runs/32401045227). All seven jobs passed: quality/package, Collector OTLP smoke, web fallback, Expo Android/iOS Release, and bare RN 0.87 Android/iOS Release. The tag workflow reruns this reusable matrix before publication.
 
 ## Runtime proof
 

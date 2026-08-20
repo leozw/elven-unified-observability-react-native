@@ -18,10 +18,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 - Unit/integration/public API tests, coverage gates, CPU/memory/network benchmarks, bundle budgets, Android/iOS release CI, package checks, and npm provenance release workflow.
 - Explicit ESM package contract with Publint and Are The Types Wrong publication gates.
 - Scoped Android/iOS local-network policy for the Collector demo and bare React Native 0.87 Android/iOS release consumers in CI.
+- Generation-guarded native initialization and shutdown so stale Android/iOS lifecycle, frame, ANR/hang, and MetricKit callbacks cannot survive a newer SDK lifecycle.
+- Bundled Apple privacy manifest with conservative data-use declarations, no tracking, and elapsed-time required-reason coverage, verified inside Expo and bare Release apps.
 
 ### Known limitations
 
 - Implicit trace context is synchronous on Hermes; work started after `await` needs `span.run` or explicit context.
 - Expo Go cannot provide native signals or durable native persistence.
 - iOS native crash/performance diagnostics depend on MetricKit delivery and real-device behavior.
+- Android built-in crash persistence covers uncaught Java/Kotlin/JVM exceptions, not NDK/POSIX signal crashes.
 - Background flush is best effort because Android/iOS may suspend JavaScript immediately.

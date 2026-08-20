@@ -137,7 +137,7 @@ Synchronous native events can use the current context directly. Asynchronous nat
 - JavaScript fatal interception is installed only when React Native exposes the previous fatal handler. The previous handler is always called.
 - Unhandled rejections use the event listener API when present and chain the existing fallback handler otherwise.
 - JS AppState and native lifecycle signals are deduplicated by semantic ownership rather than exported through separate pipelines.
-- Android uncaught exceptions are atomically persisted and delivered on the next launch before the platform's previous crash handler runs.
+- Android uncaught Java/Kotlin/JVM exceptions are atomically persisted and delivered on the next launch before the platform's previous crash handler runs. NDK/POSIX signal interception is intentionally outside the built-in SDK.
 - iOS uses MetricKit for system-supported crash, hang, launch, and performance diagnostics. Delivery can be delayed and must be validated on a real device. Android reads the OS process-start clock; iOS startup timing begins at native SDK image load because iOS exposes no supported exact process-start API to third-party apps.
 
 ## Failure model
@@ -160,6 +160,7 @@ Every telemetry boundary is fail-open:
 - OpenTelemetry JS traces and metrics are stable; its logs SDK remains development status. Exact compatible stable/experimental versions are pinned together.
 - Expo Go cannot add arbitrary native modules. It receives the safe JS-only path; Development Builds and bare apps receive the full native path.
 - MetricKit is Apple's supported source of daily performance reports and crash/hang diagnostics. Unsafe process signal interception is intentionally not implemented.
+- Apple's privacy-manifest contract is bundled with the pod. It conservatively declares possible linked diagnostics/usage data and system boot time reason `35F9.1`; the host app still owns final store disclosures and consent.
 
 Primary references:
 
@@ -171,6 +172,7 @@ Primary references:
 - [OpenTelemetry JavaScript status](https://opentelemetry.io/docs/languages/js/)
 - [OpenTelemetry JS 2.10 release](https://github.com/open-telemetry/opentelemetry-js/releases/tag/v2.10.0)
 - [Apple MetricKit](https://developer.apple.com/documentation/metrickit)
+- [Apple privacy manifest files](https://developer.apple.com/documentation/bundleresources/privacy-manifest-files)
 - [OpenTelemetry security guidance](https://opentelemetry.io/docs/security/)
 
 ## Explicit non-goals
@@ -179,5 +181,6 @@ Primary references:
 - No static long-lived secret embedded in the package or example.
 - No HTTP body, cookie, authorization, credential, hardware identifier, or raw user identity collection by default.
 - No Promise monkey patch or claim of universal implicit async context.
+- No Android NDK/POSIX or unsafe iOS signal handler; process-level native crash dumps remain the responsibility of a dedicated compatible crash provider.
 - No unsafe iOS signal handler that allocates memory or performs network I/O during a crash.
 - No guarantee that mobile operating systems allow telemetry delivery after termination or immediate suspension.

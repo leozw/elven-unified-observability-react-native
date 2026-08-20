@@ -6,14 +6,14 @@ The SDK targets modern React Native with Hermes and the New Architecture. It exp
 
 ## What it captures
 
-| Signal      | Automatic                                                                                    | Manual API                                                   |
-| ----------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Logs        | Selected `console` levels, JS/native errors, lifecycle and native events                     | Structured debug/info/warn/error/fatal                       |
-| Traces      | Fetch, XHR, screens, errors, lifecycle/native performance                                    | Spans, events, parent/restore/inject/extract                 |
-| Metrics     | HTTP duration/count, screens, exceptions, native events/duration, initialization             | Counter, up/down counter, gauge, histogram                   |
-| Errors      | JS global errors, unhandled rejections, Android crashes, iOS MetricKit diagnostics, ANR/hang | `captureException`                                           |
-| Performance | Process/app start, first frame, slow/frozen frames, HTTP, lifecycle, MetricKit               | Custom timed spans and histograms                            |
-| Context     | App/build/platform/device model, environment, session, screen                                | Pseudonymized user/tenant, business context, W3C propagation |
+| Signal      | Automatic                                                                              | Manual API                                                   |
+| ----------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Logs        | Selected `console` levels, JS/native errors, lifecycle and native events               | Structured debug/info/warn/error/fatal                       |
+| Traces      | Fetch, XHR, screens, errors, lifecycle/native performance                              | Spans, events, parent/restore/inject/extract                 |
+| Metrics     | HTTP duration/count, screens, exceptions, native events/duration, initialization       | Counter, up/down counter, gauge, histogram                   |
+| Errors      | JS errors/rejections, Android uncaught JVM errors, iOS MetricKit diagnostics, ANR/hang | `captureException`                                           |
+| Performance | Process/app start, first frame, slow/frozen frames, HTTP, lifecycle, MetricKit         | Custom timed spans and histograms                            |
+| Context     | App/build/platform/device model, environment, session, screen                          | Pseudonymized user/tenant, business context, W3C propagation |
 
 Logs and spans share trace/span IDs. Metrics use bounded OTLP exemplars for trace correlation without creating high-cardinality trace-ID labels.
 
@@ -84,6 +84,8 @@ npx react-native run-android
 
 No crash service, manifest receiver, background service, or additional dangerous permission is installed. Standard app Internet access is required for OTLP.
 
+The built-in Android next-launch crash path covers uncaught Java/Kotlin/JVM exceptions and always chains the previous handler. It deliberately does not install an NDK/POSIX signal handler. Applications that require native C/C++ crash dumps need a compatible native crash provider and must avoid enabling duplicate JS, console, or network instrumentation there.
+
 For local HTTP Collector testing, Android emulators can use `10.0.2.2` or `adb reverse tcp:4318 tcp:4318`. The included demo uses a scoped network-security config for local hosts only. Production configuration rejects cleartext Collector endpoints.
 
 ## iOS
@@ -95,9 +97,11 @@ npx pod-install
 npx react-native run-ios
 ```
 
-The pod inherits the minimum iOS version from the host React Native line. Native diagnostics use MetricKit and app-private protected persistence; no unsafe crash signal handler or swizzling dependency is added. Android startup timing uses the OS process-start clock, while iOS measures from native SDK image load because third-party iOS apps have no supported exact process-start API.
+The pod inherits the minimum iOS version from the host React Native line. Native diagnostics use MetricKit and app-private protected persistence; no unsafe crash signal handler or swizzling dependency is added. A bundled privacy manifest conservatively declares diagnostics, performance, product interaction, optional linked user ID, no tracking, and the system-boot-time reason used for elapsed-time measurement. Android startup timing uses the OS process-start clock, while iOS measures from native SDK image load because third-party iOS apps have no supported exact process-start API.
 
 iOS crash and performance reports can arrive after the originating event. MetricKit behavior must be validated on a real device for production acceptance.
+
+Generate and review the final Xcode privacy report for the host app. The SDK manifest cannot declare customer-specific business attributes or determine the app's legal basis, consent, retention, Collector use, App Store privacy answers, or Google Play Data safety answers.
 
 ## Expo
 
@@ -484,7 +488,7 @@ Use a debug/Development Build, `10.0.2.2`, or `adb reverse`. Do not weaken produ
 - OpenTelemetry JS logs remain development status upstream.
 - Implicit async context is synchronous-boundary based; explicit context is necessary after some `await` boundaries.
 - Expo Go has no native module or durable native queue.
-- Android native crashes are delivered on the next launch.
+- Android uncaught Java/Kotlin/JVM exceptions are delivered on the next launch; NDK/POSIX signal crashes are not intercepted.
 - iOS crash/performance telemetry depends on MetricKit timing and real-device availability.
 - Background flush cannot be guaranteed after immediate suspension or termination.
 - No HTTP request/response body capture exists by design.

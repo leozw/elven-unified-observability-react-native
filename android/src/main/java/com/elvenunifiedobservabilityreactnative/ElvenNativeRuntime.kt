@@ -71,6 +71,7 @@ internal object ElvenNativeRuntime {
 
   @Volatile private var application: Application? = null
   @Volatile private var initialized = false
+  @Volatile private var generation = 0L
   @Volatile private var diagnosticsEnabled = false
   @Volatile private var maxEventQueueSize = 128
   @Volatile private var foreground = true
@@ -82,7 +83,7 @@ internal object ElvenNativeRuntime {
   private var crashHandler: CrashHandler? = null
   private var watchdogThread: HandlerThread? = null
   private var heartbeatRunnable: Runnable? = null
-  private var frameCallback: Choreographer.FrameCallback? = null
+  @Volatile private var frameCallback: Choreographer.FrameCallback? = null
   private var startedActivities = 0
   private var processStartUnixMillis = System.currentTimeMillis()
   private var lastFrameNanos = 0L
@@ -112,15 +113,16 @@ internal object ElvenNativeRuntime {
     maxEventQueueSize = config.maxEventQueueSize
     processStartUnixMillis = calculateProcessStartUnixMillis()
     initialized = true
+    val activeGeneration = generation
     if (config.captureNativeCrashes) {
       restorePreviousCrash(app)
     } else {
       File(app.noBackupFilesDir, CRASH_FILE).delete()
     }
-    if (config.captureLifecycle) startLifecycle(app)
+    if (config.captureLifecycle) startLifecycle(app, activeGeneration)
     if (config.captureNativeCrashes) startCrashHandler(app)
-    if (config.captureAnr) startAnrWatchdog()
-    if (config.captureFrozenFrames) startFrameMonitor()
+    if (config.captureAnr) startAnrWatchdog(activeGeneration)
+    if (config.captureFrozenFrames) startFrameMonitor(activeGeneration)
     callback(platformContext(app).toString())
   }
 
@@ -221,9 +223,10 @@ internal object ElvenNativeRuntime {
     )
   }
 
-  private fun startLifecycle(app: Application) {
+  private fun startLifecycle(app: Application, activeGeneration: Long) {
     val callbacks = object : Application.ActivityLifecycleCallbacks {
       override fun onActivityCreated(activity: Activity, state: Bundle?) {
+        if (!isGenerationActive(activeGeneration)) return
         enqueueEvent(
           "lifecycle",
           "app.activity.created",
@@ -232,6 +235,7 @@ internal object ElvenNativeRuntime {
       }
 
       override fun onActivityStarted(activity: Activity) {
+        if (!isGenerationActive(activeGeneration)) return
         val wasBackground = !foreground
         startedActivities += 1
         if (startedActivities == 1) {
@@ -246,6 +250,7 @@ internal object ElvenNativeRuntime {
       }
 
       override fun onActivityStopped(activity: Activity) {
+        if (!isGenerationActive(activeGeneration)) return
         startedActivities = max(0, startedActivities - 1)
         if (startedActivities == 0 && !activity.isChangingConfigurations) {
           foreground = false
@@ -264,6 +269,7 @@ internal object ElvenNativeRuntime {
 
     val memoryCallbacks = object : ComponentCallbacks2 {
       override fun onTrimMemory(level: Int) {
+        if (!isGenerationActive(activeGeneration)) return
         enqueueEvent(
           "memory",
           "app.memory.trim",
@@ -272,6 +278,7 @@ internal object ElvenNativeRuntime {
       }
 
       override fun onLowMemory() {
+        if (!isGenerationActive(activeGeneration)) return
         enqueueEvent("memory", "app.memory.low")
       }
 
@@ -287,15 +294,17 @@ internal object ElvenNativeRuntime {
     Thread.setDefaultUncaughtExceptionHandler(handler)
   }
 
-  private fun startAnrWatchdog() {
+  private fun startAnrWatchdog(activeGeneration: Long) {
     lastMainHeartbeat = SystemClock.elapsedRealtime()
     anrReported = false
     val heartbeat = object : Runnable {
       override fun run() {
-        if (!initialized) return
+        if (!isGenerationActive(activeGeneration)) return
         lastMainHeartbeat = SystemClock.elapsedRealtime()
         if (anrReported) anrReported = false
-        mainHandler.postDelayed(this, HEARTBEAT_MILLIS)
+        if (isGenerationActive(activeGeneration)) {
+          mainHandler.postDelayed(this, HEARTBEAT_MILLIS)
+        }
       }
     }
     heartbeatRunnable = heartbeat
@@ -306,6 +315,7 @@ internal object ElvenNativeRuntime {
     val handler = Handler(thread.looper)
     val check = object : Runnable {
       override fun run() {
+        if (!isGenerationActive(activeGeneration)) return
         val blockedMillis = SystemClock.elapsedRealtime() - lastMainHeartbeat
         if (foreground && blockedMillis >= ANR_THRESHOLD_MILLIS && !anrReported) {
           anrReported = true
@@ -319,18 +329,25 @@ internal object ElvenNativeRuntime {
             mapOf("exception.stacktrace" to stack)
           )
         }
-        if (thread.isAlive) handler.postDelayed(this, 1000L)
+        if (thread.isAlive && isGenerationActive(activeGeneration)) {
+          handler.postDelayed(this, 1000L)
+        }
       }
     }
     handler.postDelayed(check, 1000L)
   }
 
-  private fun startFrameMonitor() {
+  private fun startFrameMonitor(activeGeneration: Long) {
     mainHandler.post {
+      if (!isGenerationActive(activeGeneration)) return@post
       framePeriodStartedAt = SystemClock.elapsedRealtime()
       framePeriodStartedUnixMillis = System.currentTimeMillis()
       val callback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
+          if (
+            !isGenerationActive(activeGeneration) ||
+            frameCallback !== this
+          ) return
           if (lastFrameNanos == 0L) {
             if (!firstFrameRecorded) {
               firstFrameRecorded = true
@@ -359,7 +376,10 @@ internal object ElvenNativeRuntime {
           ) {
             flushFrameMetrics()
           }
-          if (frameCallback === this) {
+          if (
+            frameCallback === this &&
+            isGenerationActive(activeGeneration)
+          ) {
             Choreographer.getInstance().postFrameCallback(this)
           }
         }
@@ -498,6 +518,7 @@ internal object ElvenNativeRuntime {
   @Synchronized
   private fun stopInstrumentation() {
     initialized = false
+    generation += 1
     val app = application
     lifecycleCallbacks?.let { app?.unregisterActivityLifecycleCallbacks(it) }
     componentCallbacks?.let { app?.unregisterComponentCallbacks(it) }
@@ -522,6 +543,9 @@ internal object ElvenNativeRuntime {
     startedActivities = 0
     foreground = true
   }
+
+  private fun isGenerationActive(value: Long): Boolean =
+    initialized && generation == value
 
   private fun readQueueFile(app: Application): String = synchronized(fileLock) {
     val file = queueFile(app)

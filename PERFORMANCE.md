@@ -29,10 +29,10 @@ On 2026-08-20, Node 24.14.0 on darwin-arm64 measured:
 
 | Measurement              |         Result |
 | ------------------------ | -------------: |
-| Startup median           |       0.248 ms |
-| Startup p95              |       5.143 ms |
-| Correlated event average |      0.0493 ms |
-| Retained heap            |  396,176 bytes |
+| Startup median           |       0.236 ms |
+| Startup p95              |       5.629 ms |
+| Correlated event average |      0.0590 ms |
+| Retained heap            |  396,448 bytes |
 | OTLP bytes/event         | 1,635.18 bytes |
 | Largest OTLP request     |   55,192 bytes |
 | Production bundle raw    |  263,784 bytes |
