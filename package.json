@@ -61,7 +61,7 @@
     "pack:check": "npm pack --dry-run",
     "release:check": "node scripts/verify-release.mjs",
     "validate": "yarn format:check && yarn lint && yarn typecheck && yarn test:coverage && yarn build && yarn native:codegen && yarn security:audit && yarn benchmark && yarn size && yarn package:lint && yarn pack:check",
-    "prepublishOnly": "yarn validate"
+    "prepublishOnly": "node .yarn/releases/yarn-4.11.0.cjs validate"
   },
   "keywords": [
     "react-native",
