@@ -1,0 +1,13 @@
+services:
+  collector:
+    image: otel/opentelemetry-collector:0.158.0
+    command: ['--config=/etc/otelcol/config.yaml']
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - '127.0.0.1:4318:4318'
+      - '127.0.0.1:13133:13133'

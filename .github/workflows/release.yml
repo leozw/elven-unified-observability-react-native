@@ -1,0 +1,50 @@
+name: Publish npm package
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validation:
+    name: Complete release validation
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Validate and publish
+    needs: validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js for npm trusted publishing
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: node .yarn/releases/yarn-4.11.0.cjs install --immutable
+
+      - name: Verify release metadata
+        run: node scripts/verify-release.mjs "${GITHUB_REF_NAME}"
+
+      - name: Build release payload
+        run: node .yarn/releases/yarn-4.11.0.cjs build
+
+      - name: Publish with OIDC and provenance or verify bootstrap version
+        run: node scripts/publish-or-verify.mjs

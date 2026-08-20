@@ -1,0 +1,10 @@
+.bare-validation/
+artifacts/
+coverage/
+lib/
+node_modules/
+example/.expo/
+example/android/
+example/dist/
+example/ios/
+example/node_modules/
