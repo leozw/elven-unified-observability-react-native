@@ -1,0 +1,5 @@
+#import <ElvenUnifiedObservabilityReactNativeSpec/ElvenUnifiedObservabilityReactNativeSpec.h>
+
+@interface ElvenUnifiedObservabilityReactNative : NSObject <NativeElvenUnifiedObservabilityReactNativeSpec>
+
+@end
