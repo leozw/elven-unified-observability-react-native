@@ -32,6 +32,9 @@ jobs:
       - name: Run complete validation
         run: node .yarn/releases/yarn-4.11.0.cjs validate
 
+      - name: Validate Android runtime probe
+        run: bash -n scripts/verify-android-runtime.sh
+
       - name: Create inspected package artifact
         run: npm pack --ignore-scripts --json > artifacts/npm-pack.json
 
@@ -247,6 +250,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
       - name: Download RN 0.79.2 Legacy release
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -260,21 +274,7 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: |
-            adb install -r runtime-apk/app-release.apk
-            adb logcat -c
-            adb shell am force-stop com.elvenrn079validation
-            adb shell monkey -p com.elvenrn079validation -c android.intent.category.LAUNCHER 1
-            for attempt in $(seq 1 60); do
-              adb shell uiautomator dump /sdcard/elven-window.xml >/dev/null 2>&1 || true
-              if adb shell cat /sdcard/elven-window.xml 2>/dev/null | grep -q 'Elven native bridge ready'; then
-                exit 0
-              fi
-              sleep 2
-            done
-            adb shell cat /sdcard/elven-window.xml || true
-            adb logcat -d '*:E' || true
-            exit 1
+          script: bash scripts/verify-android-runtime.sh runtime-apk/app-release.apk
 
   ios-release:
     name: Expo 57 iOS release simulator
