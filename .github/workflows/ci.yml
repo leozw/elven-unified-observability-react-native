@@ -32,6 +32,9 @@ jobs:
       - name: Run complete validation
         run: node .yarn/releases/yarn-4.11.0.cjs validate
 
+      - name: Validate Android runtime probe
+        run: bash -n scripts/verify-android-runtime.sh
+
       - name: Create inspected package artifact
         run: npm pack --ignore-scripts --json > artifacts/npm-pack.json
 
@@ -158,10 +161,36 @@ jobs:
           path: ${{ github.workspace }}/.bare-validation/android/app/build/outputs/apk/release/*.apk
 
   bare-rn-079-android-release:
-    name: Bare RN 0.79.7 Android release
+    name: Bare RN ${{ matrix.react-native }} ${{ matrix.architecture }} Android release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - react-native: 0.79.0
+            architecture: legacy
+            new-arch-enabled: 'false'
+            artifact-suffix: rn-0790-legacy
+          - react-native: 0.79.2
+            architecture: legacy
+            new-arch-enabled: 'false'
+            artifact-suffix: rn-0792-legacy
+          - react-native: 0.79.7
+            architecture: legacy
+            new-arch-enabled: 'false'
+            artifact-suffix: rn-0797-legacy
+          - react-native: 0.79.0
+            architecture: new
+            new-arch-enabled: 'true'
+            artifact-suffix: rn-0790-new
+          - react-native: 0.79.7
+            architecture: new
+            new-arch-enabled: 'true'
+            artifact-suffix: rn-0797-new
     env:
       BARE_APP_DIR: ${{ github.workspace }}/.bare-rn-079-validation
+      RN_NEW_ARCH_ENABLED: ${{ matrix.new-arch-enabled }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,38 +206,75 @@ jobs:
           distribution: zulu
           java-version: '17'
 
-      - name: Create RN 0.79.7 consumer from the packed SDK
+      - name: Create RN ${{ matrix.react-native }} consumer from the packed SDK
         shell: bash
         run: |
           node .yarn/releases/yarn-4.11.0.cjs build
           package_tarball="$(npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP")"
           npx --yes @react-native-community/cli@18.0.0 init ElvenRn079Validation \
-            --version 0.79.7 \
+            --version "${{ matrix.react-native }}" \
             --pm npm \
             --directory "$BARE_APP_DIR" \
             --skip-git-init \
             --install-pods false
+          node -e "const fs=require('node:fs');const p='$BARE_APP_DIR/android/gradle.properties';const s=fs.readFileSync(p,'utf8');const n=s.replace(/^newArchEnabled=(?:true|false)$/m,'newArchEnabled=$RN_NEW_ARCH_ENABLED');if(n===s&&!s.includes('newArchEnabled=$RN_NEW_ARCH_ENABLED'))process.exit(1);fs.writeFileSync(p,n);"
           npm install --prefix "$BARE_APP_DIR" --ignore-scripts --save-exact "$RUNNER_TEMP/$package_tarball"
           cp scripts/fixtures/bare-App.tsx "$BARE_APP_DIR/App.tsx"
 
-      - name: Verify RN 0.79.7 New Architecture
-        run: grep -q '^newArchEnabled=true$' "$BARE_APP_DIR/android/gradle.properties"
+      - name: Verify RN version, architecture, and peer resolution
+        shell: bash
+        run: |
+          grep -q "^newArchEnabled=${RN_NEW_ARCH_ENABLED}$" "$BARE_APP_DIR/android/gradle.properties"
+          node -e "const p=require('$BARE_APP_DIR/node_modules/react-native/package.json');if(p.version!=='${{ matrix.react-native }}')process.exit(1);"
+          npm ls --prefix "$BARE_APP_DIR" elven-unified-observability-react-native react react-native
 
-      - name: Typecheck RN 0.79.7 consumer
+      - name: Typecheck RN ${{ matrix.react-native }} consumer
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation
         run: npx tsc --noEmit
 
-      - name: Build RN 0.79.7 Android release
+      - name: Build RN ${{ matrix.react-native }} Android release
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation
         run: NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
 
-      - name: Upload RN 0.79.7 Android release
+      - name: Upload RN ${{ matrix.react-native }} Android release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bare-rn-079-android-release
+          name: bare-${{ matrix.artifact-suffix }}-android-release
           if-no-files-found: error
           retention-days: 14
           path: ${{ github.workspace }}/.bare-rn-079-validation/android/app/build/outputs/apk/release/*.apk
+
+  bare-rn-0792-legacy-android-runtime:
+    name: Bare RN 0.79.2 Legacy Android runtime
+    needs: bare-rn-079-android-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Enable KVM group permissions
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download RN 0.79.2 Legacy release
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bare-rn-0792-legacy-android-release
+          path: runtime-apk
+
+      - name: Boot emulator and prove native bridge availability
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash scripts/verify-android-runtime.sh runtime-apk/app-release.apk
 
   ios-release:
     name: Expo 57 iOS release simulator
@@ -330,11 +396,36 @@ jobs:
           path: ${{ github.workspace }}/.bare-validation/ios/build/Build/Products/Release-iphonesimulator/*.app
 
   bare-rn-079-ios-release:
-    name: Bare RN 0.79.7 iOS release simulator
+    name: Bare RN ${{ matrix.react-native }} ${{ matrix.architecture }} iOS release simulator
     runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - react-native: 0.79.0
+            architecture: legacy
+            new-arch-enabled: '0'
+            artifact-suffix: rn-0790-legacy
+          - react-native: 0.79.2
+            architecture: legacy
+            new-arch-enabled: '0'
+            artifact-suffix: rn-0792-legacy
+          - react-native: 0.79.7
+            architecture: legacy
+            new-arch-enabled: '0'
+            artifact-suffix: rn-0797-legacy
+          - react-native: 0.79.0
+            architecture: new
+            new-arch-enabled: '1'
+            artifact-suffix: rn-0790-new
+          - react-native: 0.79.7
+            architecture: new
+            new-arch-enabled: '1'
+            artifact-suffix: rn-0797-new
     env:
       BARE_APP_DIR: ${{ github.workspace }}/.bare-rn-079-validation
-      RCT_NEW_ARCH_ENABLED: '1'
+      RCT_NEW_ARCH_ENABLED: ${{ matrix.new-arch-enabled }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -347,29 +438,36 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
-      - name: Create RN 0.79.7 consumer from the packed SDK
+      - name: Create RN ${{ matrix.react-native }} consumer from the packed SDK
         shell: bash
         run: |
           node .yarn/releases/yarn-4.11.0.cjs build
           package_tarball="$(npm pack --ignore-scripts --silent --pack-destination "$RUNNER_TEMP")"
           npx --yes @react-native-community/cli@18.0.0 init ElvenRn079Validation \
-            --version 0.79.7 \
+            --version "${{ matrix.react-native }}" \
             --pm npm \
             --directory "$BARE_APP_DIR" \
             --skip-git-init \
             --install-pods false
+          node -e "const fs=require('node:fs');const p='$BARE_APP_DIR/android/gradle.properties';const s=fs.readFileSync(p,'utf8');const v=process.env.RCT_NEW_ARCH_ENABLED==='1'?'true':'false';const n=s.replace(/^newArchEnabled=(?:true|false)$/m,'newArchEnabled='+v);if(n===s&&!s.includes('newArchEnabled='+v))process.exit(1);fs.writeFileSync(p,n);"
           npm install --prefix "$BARE_APP_DIR" --ignore-scripts --save-exact "$RUNNER_TEMP/$package_tarball"
           cp scripts/fixtures/bare-App.tsx "$BARE_APP_DIR/App.tsx"
 
-      - name: Typecheck RN 0.79.7 consumer
+      - name: Verify RN version and peer resolution
+        shell: bash
+        run: |
+          node -e "const p=require('$BARE_APP_DIR/node_modules/react-native/package.json');if(p.version!=='${{ matrix.react-native }}')process.exit(1);"
+          npm ls --prefix "$BARE_APP_DIR" elven-unified-observability-react-native react react-native
+
+      - name: Typecheck RN ${{ matrix.react-native }} consumer
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation
         run: npx tsc --noEmit
 
-      - name: Install RN 0.79.7 CocoaPods
+      - name: Install RN ${{ matrix.react-native }} CocoaPods
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation/ios
         run: pod install
 
-      - name: Build RN 0.79.7 iOS release simulator
+      - name: Build RN ${{ matrix.react-native }} iOS release simulator
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation
         run: >-
           xcodebuild
@@ -392,10 +490,10 @@ jobs:
           test -n "$manifest"
           plutil -lint "$manifest"
 
-      - name: Upload RN 0.79.7 iOS release
+      - name: Upload RN ${{ matrix.react-native }} iOS release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bare-rn-079-ios-release-simulator
+          name: bare-${{ matrix.artifact-suffix }}-ios-release-simulator
           if-no-files-found: error
           retention-days: 14
           path: ${{ github.workspace }}/.bare-rn-079-validation/ios/build/Build/Products/Release-iphonesimulator/*.app
