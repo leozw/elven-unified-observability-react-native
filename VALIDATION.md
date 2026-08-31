@@ -1,6 +1,32 @@
 # Validation evidence
 
-This file records the evidence for release candidate `0.2.0` on 2026-08-20. Static, emulator, real-device, and backend proof are intentionally reported separately.
+This file records reproducible evidence by release. Static, emulator, real-device, and backend proof are intentionally reported separately.
+
+## React Native 0.79.x support in release candidate 0.3.0
+
+Local evidence collected on 2026-08-31:
+
+| Gate                                    | Result                                                                                                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full package validation                 | Passed: formatting, lint, TypeScript, 57 tests, coverage thresholds, build, Android/iOS Codegen, audit, performance/size budgets, Publint, ATTW, and dry pack |
+| Production dependency audit             | Passed with no audit suggestions for the Elven package dependency graph                                                                                       |
+| Actual 0.3.0 tarball                    | Passed: 196 files, approximately 185.6 kB compressed and 750.8 kB unpacked                                                                                    |
+| RN 0.79.0 Legacy standard install/build | Passed with the 0.3.0 tarball: normal peer resolution, TypeScript, Hermes, Codegen, native compilation, lint vital, and Android Release APK packaging         |
+| RN 0.79.2 Legacy standard install       | Passed with the 0.3.0 tarball without `--force`, `--legacy-peer-deps`, or a workspace link; npm resolved React 19.0.0 and React Native 0.79.2                 |
+| RN 0.79.2 TypeScript and autolinking    | Passed; Android package and iOS podspec were discovered                                                                                                       |
+| RN 0.79.2 Legacy Android Release        | Passed with Java 17, Hermes, Metro 0.82.5, Codegen, Kotlin/Java, lint vital, AAR, and APK packaging                                                           |
+| Collector OTLP smoke                    | Passed against Collector 0.158.0; correlated traces, logs, and metrics were accepted                                                                          |
+| Workflow syntax                         | Passed with `actionlint`                                                                                                                                      |
+
+The 0.3.0 workflow adds external-tarball Android and iOS Release matrices for RN 0.79.0, the customer version 0.79.2, and 0.79.7. Legacy is built at all three points; New Architecture is built at the minimum and maximum boundaries. A separate Android emulator gate installs the 0.79.2 Legacy Release APK and requires `nativeBridgeAvailable` to be true before CI can pass.
+
+The generated RN 0.79.2 host template reported 14 production audit findings in its own unsupported React Native/CLI/Metro tree: 6 moderate, 6 high, and 2 critical. None was introduced by an Elven dependency. This is an upstream host-application risk, not a clean security bill for React Native 0.79; see [SECURITY.md](SECURITY.md).
+
+Full Xcode is unavailable on the local host, so the iOS 0.79.x Legacy/New Release matrix is a CI gate. Physical-device behavior, iOS MetricKit delivery, customer network/TLS/authentication, and final backend queries remain deployment acceptance gates.
+
+## Historical 0.2.0 baseline
+
+The remaining sections record release candidate `0.2.0` evidence from 2026-08-20 and are retained for traceability.
 
 ## Static and local JavaScript
 

@@ -1,7 +1,7 @@
 import type { LogLevel } from '../types';
 
 export const SDK_NAME = 'elven-unified-observability-react-native';
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 export const ATTR_SERVICE_NAME = 'service.name';
 export const ATTR_SERVICE_VERSION = 'service.version';
 export const ATTR_SERVICE_NAMESPACE = 'service.namespace';

@@ -155,7 +155,7 @@ Every telemetry boundary is fail-open:
 
 ## Decisions and sources
 
-- React Native 0.87.0 was the latest stable release on 2026-08-20; 0.86.2 remains the version targeted by Expo SDK 57. The root toolchain and Expo example intentionally cover both maintained lines. React Native 0.79.7 is isolated as an extended compatibility lane because 0.79 is unsupported upstream; it does not widen the package contract to untested intermediate minors.
+- React Native 0.87.0 was the latest stable release on 2026-08-20; 0.86.2 remains the version targeted by Expo SDK 57. The root toolchain and Expo example intentionally cover both maintained lines. React Native 0.79.0-0.79.7 is isolated as an extended compatibility lane because 0.79 is unsupported upstream; its Legacy interop support does not widen the package contract to intermediate minor lines.
 - React Native New Architecture has been enabled by default since 0.76, and Codegen is the supported typed bridge generation path.
 - OpenTelemetry JS traces and metrics are stable; its logs SDK remains development status. Exact compatible stable/experimental versions are pinned together.
 - Expo Go cannot add arbitrary native modules. It receives the safe JS-only path; Development Builds and bare apps receive the full native path.

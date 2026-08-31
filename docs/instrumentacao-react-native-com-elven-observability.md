@@ -50,22 +50,24 @@ Por padrão, o SDK não captura corpos HTTP, parâmetros de rota, query strings 
 
 ### Compatibilidade
 
-Matriz validada para a versão `0.2.0`, em agosto de 2026:
+Matriz validada para a versão `0.3.0`, em agosto de 2026:
 
 | Ambiente              | Suporte                                           |
 | --------------------- | ------------------------------------------------- |
-| React Native          | `0.79.7`, `0.86.x` e `0.87.x`                     |
+| React Native          | `0.79.0` a `0.79.7`, `0.86.x` e `0.87.x`          |
 | React                 | `19.x`                                            |
-| Runtime               | Hermes e New Architecture                         |
+| Runtime               | Hermes; Legacy em `0.79.x`; New nas demais faixas |
 | Android               | API 24 ou superior, Java 17                       |
 | iOS bare React Native | iOS 15.1 ou superior                              |
 | Expo SDK 57           | Development Build, EAS Build e prebuild/CNG       |
 | Expo Go               | Fallback somente JavaScript, sem recursos nativos |
 | React Native Web      | Best effort; fora do contrato Android/iOS         |
 
-O React Native `0.79.7` é uma faixa isolada de compatibilidade estendida para aplicações existentes. As versões `0.79.0` a `0.79.6` e `0.80` a `0.85` não estão incluídas. Como a linha 0.79 não recebe mais manutenção oficial, o cliente deve manter um plano de atualização para uma versão suportada do React Native.
+O React Native `0.79.x` é uma faixa isolada de compatibilidade estendida para aplicações existentes. Ela cobre Legacy e New Architecture no Android e iOS. As versões `0.80` a `0.85` não estão incluídas. Como a linha 0.79 não recebe mais manutenção oficial, o cliente deve manter um plano de atualização para uma versão suportada do React Native e preferir o patch `0.79.7` quando a atualização for viável.
 
-O pacote não declara suporte à Legacy Architecture, JavaScriptCore, Windows, macOS, visionOS ou tvOS.
+A árvore do próprio React Native 0.79, CLI e Metro pode conter advisories conhecidos. Audite o lockfile completo do aplicativo, mantenha o servidor Metro restrito à rede de desenvolvimento e valide sempre o binário Release. Uma auditoria limpa do SDK Elven não certifica as dependências do aplicativo hospedeiro.
+
+Fora da faixa `0.79.x`, o pacote não declara suporte à Legacy Architecture. JavaScriptCore, Windows, macOS, visionOS e tvOS também ficam fora do contrato.
 
 > Suporte significa que instalação, TypeScript, Codegen, autolinking e builds Android/iOS Release passaram na matriz declarada. Entrega de MetricKit e crashes nativos deve ser validada em dispositivos reais antes de um rollout amplo.
 

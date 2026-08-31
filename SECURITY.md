@@ -23,6 +23,18 @@ Do not open a public issue containing an exploitable vulnerability, customer tel
 
 A long-lived static token embedded in JavaScript, Android resources, an iOS bundle, Dockerfile, or Expo public environment variable is extractable and must not be treated as a secret.
 
+## Host framework posture
+
+The React Native 0.79.x compatibility lane is operational support for existing applications, not security maintenance for React Native itself. The line is unsupported upstream and its CLI/Metro dependency tree can report known advisories even when the Elven package audit is clean.
+
+- keep Metro and development servers private and bound only to trusted development networks;
+- ship and validate Release builds, never a development server or debug bundle;
+- audit the host application's complete lockfile independently from this package;
+- test any temporary npm/Yarn override in the host application rather than forcing transitive versions from the SDK;
+- prefer the final 0.79 patch where feasible and maintain a funded upgrade plan to a supported React Native line.
+
+Elven publication, provenance, or CI cannot certify the security of the host framework, application code, Collector, mobile device, or customer network.
+
 Preferred deployment:
 
 1. Send OTLP/HTTP over TLS to a customer-controlled Collector or telemetry gateway.

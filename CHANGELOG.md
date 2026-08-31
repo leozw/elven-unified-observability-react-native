@@ -2,6 +2,20 @@
 
 All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and Semantic Versioning.
 
+## [0.3.0] - 2026-08-31
+
+### Added
+
+- Extended React Native 0.79 compatibility across published patches 0.79.0-0.79.7 with Hermes on Android and iOS.
+- Declared Legacy Architecture support for the React Native 0.79.x compatibility lane while preserving the New Architecture path.
+- External-package Android and iOS Release matrices for 0.79.0, customer version 0.79.2, and 0.79.7, including Legacy/New Architecture boundaries.
+- Android Release emulator gate that proves the native bridge is available on React Native 0.79.2 Legacy Architecture.
+
+### Changed
+
+- Widened the React Native peer range from `>=0.79.7 <0.80.0` to `>=0.79.0 <0.80.0` without opening unvalidated React Native 0.80-0.85 lines.
+- Reused the existing typed Codegen module and fail-open JS pipeline for Legacy interop instead of introducing a second native implementation.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added
