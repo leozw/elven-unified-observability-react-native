@@ -262,7 +262,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Download RN 0.79.2 Legacy release
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bare-rn-0792-legacy-android-release
           path: runtime-apk
