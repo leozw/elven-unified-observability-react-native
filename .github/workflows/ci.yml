@@ -39,7 +39,7 @@ jobs:
         run: npm pack --ignore-scripts --json > artifacts/npm-pack.json
 
       - name: Upload validation evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: validation-evidence
           if-no-files-found: error
@@ -103,7 +103,7 @@ jobs:
         run: node .yarn/releases/yarn-4.11.0.cjs example build:android
 
       - name: Upload Android release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-release
           if-no-files-found: error
@@ -153,7 +153,7 @@ jobs:
         run: NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Upload bare Android release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bare-rn-087-android-release
           if-no-files-found: error
@@ -237,7 +237,7 @@ jobs:
         run: NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Upload RN ${{ matrix.react-native }} Android release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bare-${{ matrix.artifact-suffix }}-android-release
           if-no-files-found: error
@@ -315,7 +315,7 @@ jobs:
           plutil -lint "$manifest"
 
       - name: Upload iOS release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-simulator
           if-no-files-found: error
@@ -388,7 +388,7 @@ jobs:
           plutil -lint "$manifest"
 
       - name: Upload bare iOS release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bare-rn-087-ios-release-simulator
           if-no-files-found: error
@@ -491,7 +491,7 @@ jobs:
           plutil -lint "$manifest"
 
       - name: Upload RN ${{ matrix.react-native }} iOS release
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bare-${{ matrix.artifact-suffix }}-ios-release-simulator
           if-no-files-found: error
@@ -514,7 +514,7 @@ jobs:
         run: node .yarn/releases/yarn-4.11.0.cjs example build:web
 
       - name: Upload web export
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-release
           if-no-files-found: error
