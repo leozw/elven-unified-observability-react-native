@@ -23,7 +23,7 @@
   "private": true,
   "devDependencies": {
     "cross-env": "10.1.0",
-    "expo-dev-client": "~57.0.14",
+    "expo-dev-client": "~58.0.14",
     "react-native-builder-bob": "^0.43.0",
     "react-native-monorepo-config": "^0.4.0"
   }
