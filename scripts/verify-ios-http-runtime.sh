@@ -18,13 +18,16 @@ xcrun simctl boot "${simulator}" || true
 xcrun simctl bootstatus "${simulator}" -b
 xcrun simctl install "${simulator}" "${app}"
 # Start the bounded collector after slow simulator migration/install, not before it.
-node scripts/native-http-collector.mjs > native-http-collector.log 2>&1 &
+node scripts/native-http-collector.mjs 4319 600000 > native-http-collector.log 2>&1 &
 collector_pid=$!
 for _attempt in $(seq 1 30); do
   if curl --fail --silent --max-time 2 http://127.0.0.1:4319/stats >/dev/null; then break; fi
   sleep 0.1
 done
+curl --fail --silent --max-time 2 http://127.0.0.1:4319/stats >/dev/null
+echo "ELVEN_IOS_PROBE_LAUNCH_BEGIN $(date -u +%FT%TZ)"
 xcrun simctl launch "${simulator}" "${bundle_id}"
+echo "ELVEN_IOS_PROBE_LAUNCH_END $(date -u +%FT%TZ)"
 for _attempt in $(seq 1 60); do
   stats="$(curl --fail --silent --max-time 2 http://127.0.0.1:4319/stats || true)"
   if printf '%s' "${stats}" | node --input-type=module -e 'let s="";for await(const c of process.stdin)s+=c;process.exit(JSON.parse(s||"{}").proof==="8388608"?0:1);'; then

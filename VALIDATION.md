@@ -2,6 +2,20 @@
 
 This file records reproducible evidence by release. Static, emulator, real-device, and backend proof are intentionally reported separately.
 
+## 2026-10-29 audit candidate: publication HOLD
+
+No new version has been selected or published. Public `0.3.0` must not be overwritten. The candidate retains its public exports, optionalizes the new advanced `ResolvedConfig` fields, and requires a native rebuild for lifecycle fencing and owned status-only HTTP. Missing native adapters defer mobile export, including in Expo Go. Schema-v1/mismatched queues are dropped, not relabelled; see [safety and migration](docs/SAFETY.md).
+
+- Source `aec9d5e19f84fbf16237e93f79d2bd5c3ca9fb4f`, [run40954972976](https://github.com/leozw/elven-unified-observability-react-native/actions/runs/40954972976): all14 native release builds, Android0.79.2 Legacy/Hermes runtime, iOS0.79.2 Legacy/0.79.7 Turbo/0.87 Turbo HTTP runtime and native iOS lifecycle/storage harness passed. This independently qualifies the additive Legacy export fix, not later JS changes.
+- New redaction source `4ef8ee7c8c8721b546e712c7988a4901307a3bf5`, [run40959814899](https://github.com/leozw/elven-unified-observability-react-native/actions/runs/40959814899):105 Jest tests passed; fresh Android0.79.2 Legacy/Hermes runtime passed, including public logger input with a65500-character ambiguous token and collector receipt of `[OVERSIZE]`. Fresh iOS build/runtime readback is still pending. The previous APK is not claimed as this new bundle.
+- The runtime probes require the exact OTLP log sentinel, SDK success acknowledgement, no pending/dropped batches, early cancellation of an8MiB response, one request after429 despite forced flush, consent abort/purge and an unaffected application request. Android also checks the host custom client hook and removal of AtomicFile base/backup/new files. iOS custom TLS/proxy handlers are not qualified by plain loopback HTTP.
+- The standard status-only native fetch baseline materialized8388608 bytes. Server-written bytes before cancellation are not measured native RSS, an OOM experiment, physical-device proof or customer RCA.
+- The initial Android candidate delivery assertion failure and immutable4478 iOS Legacy availability failure remain preserved in the audit evidence. They are not erased by later success.
+- The accepted Node sanitizer/public-logger regex stall was reproduced in isolated watchdog children. A linear preflight now replaces a whole field before built-in regexes/URL normalization if input exceeds65536 characters or any non-whitespace token exceeds1024. Ordinary masks remain active; legitimate long identifiers/URLs/diagnostic details can drop. Engine key enumeration and trusted custom callbacks are not constant-work guarantees.
+- Quality remains **RED** for actual Expo tooling Zod3.25.76, [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5). Compatible CLI57.0.32 still requires v3; local guards are mitigation only. No audit suppression or forced Zod4. The separately queried SDK dependency graph is not an audit of RN peers or Expo tooling.
+
+Independent parent review, terminal exact-source native qualification, upstream security disposition and platform acceptance remain separate release gates. Physical-device/background/OS-kill/MetricKit/crash delivery, real host TLS/proxy/pinning, signed device workflows and representative CPU/memory/battery soak are not proven. Shared macOS/Node timings are noisy and do not establish strict overhead budgets. The remaining sections are historical, not a current green audit.
+
 ## React Native 0.79.x support in release candidate 0.3.0
 
 Local evidence collected on 2026-08-31:

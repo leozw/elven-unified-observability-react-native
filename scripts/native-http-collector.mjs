@@ -106,8 +106,19 @@ const server = http.createServer((request, response) => {
 });
 server.requestTimeout = 10_000;
 server.headersTimeout = 10_000;
+const lifetimeMillis = Number(process.argv[3] ?? 180_000);
+if (
+  !Number.isInteger(lifetimeMillis) ||
+  lifetimeMillis < 15_000 ||
+  lifetimeMillis > 600_000
+)
+  throw new Error(
+    'Probe collector lifetime must be bounded to 15-600 seconds.'
+  );
 server.listen(Number(process.argv[2] ?? 4319), '127.0.0.1', () => {
-  console.log(`ELVEN_NATIVE_HTTP_COLLECTOR_READY:${server.address().port}`);
+  console.log(
+    `ELVEN_NATIVE_HTTP_COLLECTOR_READY:${server.address().port} ${new Date().toISOString()} lifetimeMillis=${lifetimeMillis}`
+  );
 });
 const stop = () => {
   server.closeAllConnections();
@@ -115,4 +126,9 @@ const stop = () => {
 };
 process.on('SIGTERM', stop);
 process.on('SIGINT', stop);
-setTimeout(stop, 180_000).unref();
+setTimeout(() => {
+  console.log(
+    `ELVEN_NATIVE_HTTP_COLLECTOR_DEADLINE ${new Date().toISOString()}`
+  );
+  stop();
+}, lifetimeMillis).unref();
