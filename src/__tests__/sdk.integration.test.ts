@@ -1,4 +1,5 @@
 import { ElvenObservabilitySdk } from '../sdk';
+import { Platform } from 'react-native';
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { UnifiedObservabilityConfig } from '../types';
 
@@ -37,6 +38,13 @@ function integrationConfig(): UnifiedObservabilityConfig {
 }
 
 describe('ElvenObservabilitySdk OTLP integration', () => {
+  const originalPlatform = Platform.OS;
+  beforeAll(() => {
+    Object.assign(Platform, { OS: 'web' });
+  });
+  afterAll(() => {
+    Object.assign(Platform, { OS: originalPlatform });
+  });
   const originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
 
   afterEach(() => {

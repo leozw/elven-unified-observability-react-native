@@ -1,6 +1,8 @@
 import { ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import { resolveConfig, validateConfiguration } from '../core/config';
 import { DynamicTelemetryContext } from '../core/dynamicContext';
+import { queueProvenance } from '../core/provenance';
+import type { ResolvedConfig } from '../types';
 import { Sanitizer } from '../core/sanitizer';
 import {
   matchesUrl,
@@ -13,6 +15,21 @@ import {
 } from '../__fixtures__/testConfig';
 
 describe('configuration', () => {
+  it('accepts the old ResolvedConfig shape without new optional fields', () => {
+    const config = resolvedConfiguration();
+    const legacy: Omit<ResolvedConfig, 'identity' | 'lifecycleTimeoutMillis'> =
+      Object.fromEntries(
+        Object.entries(config).filter(
+          ([key]) => key !== 'identity' && key !== 'lifecycleTimeoutMillis'
+        )
+      ) as Omit<ResolvedConfig, 'identity' | 'lifecycleTimeoutMillis'>;
+    const accepted: ResolvedConfig = legacy;
+    expect(accepted.identity).toBeUndefined();
+    expect(accepted.lifecycleTimeoutMillis).toBeUndefined();
+    expect(queueProvenance(accepted)).toBe(
+      queueProvenance({ ...config, identity: {} })
+    );
+  });
   it('resolves safe production defaults and exact OTLP signal paths', () => {
     const config = resolveConfig(
       baseConfiguration({

@@ -250,7 +250,9 @@ jobs:
 
       - name: Build RN ${{ matrix.react-native }} Android release
         working-directory: ${{ github.workspace }}/.bare-rn-079-validation
-        run: NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
+        run: |
+          node "$GITHUB_WORKSPACE/scripts/prepare-native-http-probe.mjs" "$BARE_APP_DIR"
+          NODE_ENV=production ./android/gradlew -p android assembleRelease -Dorg.gradle.jvmargs=-Xmx4g
 
       - name: Upload RN ${{ matrix.react-native }} Android release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -337,6 +339,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: example/ios/build/Build/Products/Release-iphonesimulator/*.app
+
+  bare-rn-0792-legacy-ios-http-runtime:
+    name: Bare RN 0.79.2 Legacy iOS HTTP runtime
+    needs: bare-rn-079-ios-release
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: bare-rn-0792-legacy-ios-release-simulator
+          path: runtime-ios
+      - run: bash scripts/verify-ios-http-runtime.sh runtime-ios
 
   bare-ios-release:
     name: Bare RN 0.87 iOS release simulator

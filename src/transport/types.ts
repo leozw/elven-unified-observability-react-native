@@ -15,6 +15,7 @@ export interface PersistedQueue {
   schemaVersion: 2;
   provenance: string;
   ownerGeneration: string;
+  retryNotBefore?: Partial<Record<SignalType, number>>;
   items: ReadonlyArray<QueueItem>;
 }
 

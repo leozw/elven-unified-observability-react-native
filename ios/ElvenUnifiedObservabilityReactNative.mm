@@ -1,7 +1,30 @@
 #import "ElvenUnifiedObservabilityReactNative.h"
 #import "ElvenNativeRuntime.h"
+#import "ElvenHttpTransport.h"
 
-@implementation ElvenUnifiedObservabilityReactNative
+@implementation ElvenUnifiedObservabilityReactNative {
+  ElvenHttpTransport *_http;
+}
+
+@synthesize moduleRegistry = _moduleRegistry;
+
+- (ElvenHttpTransport *)http
+{
+  @synchronized(self) { if (!_http) _http = [ElvenHttpTransport new]; return _http; }
+}
+
+- (void)sendHttp:(NSString *)sessionId requestId:(NSString *)requestId endpoint:(NSString *)endpoint
+     headersJson:(NSString *)headersJson body:(NSString *)body timeoutMillis:(double)timeoutMillis
+        resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
+{
+  [[self http] sendWithRegistry:_moduleRegistry session:sessionId requestId:requestId endpoint:endpoint
+                    headersJson:headersJson body:body timeout:timeoutMillis resolve:resolve reject:reject];
+}
+
+- (void)abortHttp:(NSString *)sessionId requestId:(NSString *)requestId
+{
+  [[self http] abortSession:sessionId requestId:requestId];
+}
 
 RCT_EXPORT_MODULE()
 
@@ -47,8 +70,11 @@ RCT_EXPORT_MODULE()
 - (void)shutdown:(RCTPromiseResolveBlock)resolve
           reject:(RCTPromiseRejectBlock)reject
 {
+  [[self http] closeAll];
   resolve(@([ElvenNativeRuntime shutdown]));
 }
+
+- (void)invalidate { [[self http] closeAll]; }
 
 - (void)setCurrentTraceContext:(NSString *)traceId spanId:(NSString *)spanId
 {
@@ -60,6 +86,7 @@ RCT_EXPORT_MODULE()
              resolve:(RCTPromiseResolveBlock)resolve
               reject:(RCTPromiseRejectBlock)reject
 {
+  [[self http] closeSession:sessionId];
   [ElvenNativeRuntime closeSession:sessionId purge:purge completion:^(BOOL closed) { resolve(@(closed)); }];
 }
 

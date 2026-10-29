@@ -16,7 +16,7 @@ import type {
 
 interface SendResult {
   outcome: 'delivered' | 'permanent-failure' | 'transient-failure';
-  retryAfterMillis?: number;
+  retryNotBefore?: number;
   status?: number;
 }
 
@@ -37,6 +37,7 @@ export class DurableTransport {
   private transportFailures = 0;
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
+  private retryNotBefore: Partial<Record<SignalType, number>> = {};
   private lastSuccessfulExportUnixMillis: number | undefined;
   private mutation = Promise.resolve();
   private flushPromise: Promise<TransportFlushResult> | undefined;
@@ -101,6 +102,15 @@ export class DurableTransport {
     this.pendingBytes += byteLength;
 
     const now = this.now();
+    if (
+      (this.retryNotBefore[signal] ?? 0) >=
+      now + this.config.queue.maxAgeMillis
+    ) {
+      this.pendingItems -= 1;
+      this.pendingBytes -= byteLength;
+      this.droppedItems += 1;
+      return false;
+    }
     const item: QueueItem = {
       id: createEventId(),
       signal,
@@ -114,6 +124,13 @@ export class DurableTransport {
 
     const accepted = await this.withMutation(async () => {
       if (!this.accepting) return false;
+      if (
+        (this.retryNotBefore[signal] ?? 0) >=
+        item.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis
+      ) {
+        this.droppedItems += 1;
+        return false;
+      }
       this.purgeExpired(now);
       this.items.push(item);
       this.queueBytes += item.byteLength;
@@ -184,6 +201,7 @@ export class DurableTransport {
       this.droppedItems += this.items.length;
       this.items = [];
       this.queueBytes = 0;
+      this.retryNotBefore = {};
     }
   }
 
@@ -236,6 +254,7 @@ export class DurableTransport {
         return this.items.find(
           (candidate) =>
             !attempted.has(candidate.id) &&
+            (this.retryNotBefore[candidate.signal] ?? 0) <= this.now() &&
             (force || candidate.nextAttemptUnixMillis <= this.now())
         );
       });
@@ -247,10 +266,42 @@ export class DurableTransport {
       if (this.closed) break;
       const update = await this.withMutation(async () => {
         if (this.closed) return { delivered: 0, dropped: 0 };
+        let floorDrops = 0;
+        if (result.retryNotBefore !== undefined) {
+          for (const signal of ['logs', 'metrics', 'traces'] as const) {
+            if (
+              this.config.collector[`${signal}Endpoint`] ===
+              this.config.collector[`${item.signal}Endpoint`]
+            )
+              this.retryNotBefore[signal] = Math.max(
+                this.retryNotBefore[signal] ?? 0,
+                result.retryNotBefore
+              );
+          }
+          for (
+            let position = this.items.length - 1;
+            position >= 0;
+            position -= 1
+          ) {
+            const queued = this.items[position];
+            if (
+              queued &&
+              (this.retryNotBefore[queued.signal] ?? 0) >=
+                queued.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis
+            ) {
+              this.removeAt(position);
+              floorDrops += 1;
+              this.droppedItems += 1;
+            }
+          }
+        }
         const index = this.items.findIndex(
           (candidate) => candidate.id === item.id
         );
-        if (index < 0) return { delivered: 0, dropped: 0 };
+        if (index < 0) {
+          await this.persist();
+          return { delivered: 0, dropped: floorDrops };
+        }
 
         if (result.outcome === 'delivered') {
           this.removeAt(index);
@@ -271,19 +322,19 @@ export class DurableTransport {
           this.removeAt(index);
           this.droppedItems += 1;
           await this.persist();
-          return { delivered: 0, dropped: 1 };
+          return { delivered: 0, dropped: 1 + floorDrops };
         }
 
         this.transportFailures += 1;
         this.consecutiveFailures += 1;
-        const requestedDelay =
-          result.retryAfterMillis ?? this.retryDelay(current.attempts);
-        current.nextAttemptUnixMillis =
+        current.nextAttemptUnixMillis = Math.max(
           this.now() +
-          Math.min(
-            this.config.retry.maxDelayMillis,
-            Math.max(0, requestedDelay)
-          );
+            Math.min(
+              this.config.retry.maxDelayMillis,
+              this.retryDelay(current.attempts)
+            ),
+          this.retryNotBefore[current.signal] ?? 0
+        );
         if (
           this.consecutiveFailures >=
           this.config.retry.circuitBreakerFailureThreshold
@@ -292,7 +343,7 @@ export class DurableTransport {
             this.now() + this.config.retry.circuitBreakerResetMillis;
         }
         await this.persist();
-        return { delivered: 0, dropped: 0 };
+        return { delivered: 0, dropped: floorDrops };
       });
       delivered += update.delivered;
       dropped += update.dropped;
@@ -394,6 +445,17 @@ export class DurableTransport {
         throw new Error('Unsupported durable queue schema.');
       }
       const now = this.now();
+      if (isRecord(parsed.retryNotBefore)) {
+        for (const signal of ['logs', 'metrics', 'traces'] as const) {
+          const floor = parsed.retryNotBefore[signal];
+          if (
+            typeof floor === 'number' &&
+            Number.isSafeInteger(floor) &&
+            floor > now
+          )
+            this.retryNotBefore[signal] = floor;
+        }
+      }
       for (const candidate of parsed.items.slice(
         0,
         this.config.queue.maxItems
@@ -408,6 +470,8 @@ export class DurableTransport {
           item &&
           this.config.signals[item.signal] &&
           now - item.enqueuedAtUnixMillis <= this.config.queue.maxAgeMillis &&
+          (this.retryNotBefore[item.signal] ?? 0) <
+            item.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis &&
           item.byteLength <= this.config.queue.maxItemBytes
         ) {
           this.items.push(item);
@@ -449,7 +513,14 @@ export class DurableTransport {
 
   private async persist(): Promise<void> {
     if (this.closed || !this.store.persistent) return;
-    if (this.items.length === 0) {
+    for (const signal of ['logs', 'metrics', 'traces'] as const) {
+      if ((this.retryNotBefore[signal] ?? 0) <= this.now())
+        delete this.retryNotBefore[signal];
+    }
+    if (
+      this.items.length === 0 &&
+      Object.keys(this.retryNotBefore).length === 0
+    ) {
       await this.store.clear();
       return;
     }
@@ -457,6 +528,7 @@ export class DurableTransport {
       schemaVersion: PERSISTED_SCHEMA_VERSION,
       provenance: this.provenance,
       ownerGeneration: this.ownerGeneration,
+      retryNotBefore: this.retryNotBefore,
       items: this.items,
     };
     await this.store.write(JSON.stringify(persisted));
@@ -502,7 +574,7 @@ export class DurableTransport {
           });
         });
       },
-      Math.max(0, delayMillis)
+      Math.min(2_147_483_647, Math.max(0, delayMillis))
     );
   }
 
@@ -510,7 +582,12 @@ export class DurableTransport {
     if (!this.accepting || this.items.length === 0) return;
     const now = this.now();
     const nextItemAt = Math.min(
-      ...this.items.map((item) => item.nextAttemptUnixMillis)
+      ...this.items.map((item) =>
+        Math.max(
+          item.nextAttemptUnixMillis,
+          this.retryNotBefore[item.signal] ?? 0
+        )
+      )
     );
     const nextAt = Math.max(nextItemAt, this.circuitOpenUntil);
     this.schedule(Math.max(0, nextAt - now));
@@ -540,18 +617,25 @@ function classifyResponse(
       outcome: 'transient-failure',
       status: response.status,
       ...(retryAfter
-        ? { retryAfterMillis: parseRetryAfter(retryAfter, now) }
+        ? { retryNotBefore: parseRetryAfter(retryAfter, now) }
         : {}),
     };
   }
   return { outcome: 'permanent-failure', status: response.status };
 }
 
-function parseRetryAfter(value: string, now: number): number {
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : 0;
+function parseRetryAfter(value: string, now: number): number | undefined {
+  // Reject oversized/overflowing hints conservatively without scanning or long sleeps.
+  if (value.length > 256) return Number.MAX_SAFE_INTEGER;
+  const text = value.trim();
+  if (/^\d+$/.test(text)) {
+    const timestamp = now + Number(text) * 1_000;
+    return Number.isSafeInteger(timestamp)
+      ? timestamp
+      : Number.MAX_SAFE_INTEGER;
+  }
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? Math.max(now, timestamp) : undefined;
 }
 
 function validateQueueItem(value: unknown): QueueItem | undefined {

@@ -135,8 +135,8 @@ export function createTelemetryProviders(
   });
 
   const dynamicContext = new DynamicTelemetryContext(config, sanitizer);
-  if (config.identity.user) dynamicContext.setUser(config.identity.user);
-  if (config.identity.tenant) dynamicContext.setTenant(config.identity.tenant);
+  if (config.identity?.user) dynamicContext.setUser(config.identity.user);
+  if (config.identity?.tenant) dynamicContext.setTenant(config.identity.tenant);
   const tracer = new ElvenTracer(
     tracerProvider.getTracer(SDK_NAME, SDK_VERSION),
     dynamicContext,

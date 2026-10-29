@@ -1,4 +1,5 @@
 import { ROOT_CONTEXT, SpanStatusCode, type Context } from '@opentelemetry/api';
+import { Platform } from 'react-native';
 import { Diagnostics } from './core/diagnostics';
 import { resolveConfig, validateConfiguration } from './core/config';
 import type { TelemetryProviders } from './core/providers';
@@ -353,7 +354,7 @@ export class ElvenObservabilitySdk {
     if (!runtime) return emptyFlushResult();
     const generation = this.generation;
     const budget = new LifecycleDeadline(
-      timeoutMillis ?? runtime.config.lifecycleTimeoutMillis,
+      timeoutMillis ?? runtime.config.lifecycleTimeoutMillis ?? 5_000,
       () => this.fence(false)
     );
     try {
@@ -638,7 +639,9 @@ export class ElvenObservabilitySdk {
       config,
       store,
       diagnostics,
-      adaptFetch(originalFetch),
+      Platform.OS === 'android' || Platform.OS === 'ios'
+        ? bridge.httpTransport(config.collector.timeoutMillis)
+        : adaptFetch(originalFetch),
       Date.now,
       Math.random,
       bridge.sessionId

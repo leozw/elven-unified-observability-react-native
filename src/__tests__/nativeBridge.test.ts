@@ -8,6 +8,8 @@ jest.mock('../NativeElvenUnifiedObservabilityReactNative', () => ({
     clearPersistedQueue: jest.fn(),
     shutdown: jest.fn(),
     closeSession: jest.fn(),
+    sendHttp: jest.fn(),
+    abortHttp: jest.fn(),
     setCurrentTraceContext: jest.fn(),
     setDiagnosticsEnabled: jest.fn(),
   },
@@ -27,6 +29,8 @@ const mockNativeModule = NativeModule as unknown as {
   clearPersistedQueue: jest.Mock;
   shutdown: jest.Mock;
   closeSession: jest.Mock;
+  sendHttp: jest.Mock;
+  abortHttp: jest.Mock;
   setCurrentTraceContext: jest.Mock;
   setDiagnosticsEnabled: jest.Mock;
 };
@@ -63,6 +67,126 @@ describe('NativeBridge', () => {
     mockNativeModule.clearPersistedQueue.mockResolvedValue(true);
     mockNativeModule.shutdown.mockResolvedValue(true);
     mockNativeModule.closeSession.mockResolvedValue(true);
+  });
+
+  it('exports status and bounded Retry-After metadata without using application fetch', async () => {
+    const bridge = createBridge();
+    const controller = new AbortController();
+    mockNativeModule.sendHttp.mockResolvedValue(
+      JSON.stringify({ status: 429, retryAfter: '60' })
+    );
+    const response = await bridge.httpTransport(500)(
+      'https://collector.example.test/v1/logs',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+        signal: controller.signal,
+      }
+    );
+    expect(response.status).toBe(429);
+    expect(response.headers?.get('retry-after')).toBe('60');
+    expect(response.headers?.get('authorization')).toBeNull();
+    expect(mockNativeModule.sendHttp).toHaveBeenCalledWith(
+      bridge.sessionId,
+      expect.any(String),
+      'https://collector.example.test/v1/logs',
+      '{"content-type":"application/json"}',
+      '{}',
+      500
+    );
+    await bridge.close(true);
+    expect(mockNativeModule.abortHttp).not.toHaveBeenCalled();
+  });
+
+  it('cancels only its request, fences late success and waits for native acknowledgement on close', async () => {
+    const bridge = createBridge();
+    let done!: (value: string) => void;
+    mockNativeModule.sendHttp.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          done = resolve;
+        })
+    );
+    const controller = new AbortController();
+    const request = bridge.httpTransport(500)(
+      'https://collector.example.test',
+      {
+        method: 'POST',
+        headers: {},
+        body: '{}',
+        signal: controller.signal,
+      }
+    );
+    const rejected = request.catch((error: unknown) => error);
+    controller.abort();
+    expect(mockNativeModule.abortHttp).toHaveBeenCalledWith(
+      bridge.sessionId,
+      expect.any(String)
+    );
+    let closed = false;
+    const closing = bridge.close(true).then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    done('{"status":202}');
+    expect(await rejected).toEqual(
+      expect.objectContaining({ message: 'Telemetry request closed.' })
+    );
+    await closing;
+    expect(closed).toBe(true);
+    await expect(
+      bridge.httpTransport(500)('https://collector.example.test', {
+        method: 'POST',
+        headers: {},
+        body: '{}',
+      })
+    ).rejects.toThrow('unavailable');
+    expect(mockNativeModule.sendHttp).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['x'.repeat(2049), '{"status":999}', 'invalid'])(
+    'rejects malformed native HTTP acknowledgements',
+    async (raw) => {
+      const bridge = createBridge();
+      mockNativeModule.sendHttp.mockResolvedValue(raw);
+      await expect(
+        bridge.httpTransport(500)('https://collector.example.test', {
+          method: 'POST',
+          headers: {},
+          body: '{}',
+        })
+      ).rejects.toThrow();
+    }
+  );
+
+  it('bounds native HTTP concurrency and rejects already aborted requests before native send', async () => {
+    const bridge = createBridge();
+    let done!: (value: string) => void;
+    const pending = new Promise<string>((resolve) => {
+      done = resolve;
+    });
+    mockNativeModule.sendHttp.mockReturnValue(pending);
+    const send = bridge.httpTransport(500);
+    const init = { method: 'POST' as const, headers: {}, body: '{}' };
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      send('https://collector.example.test', {
+        ...init,
+        signal: controller.signal,
+      })
+    ).rejects.toThrow('aborted');
+    const requests = Array.from({ length: 4 }, () =>
+      send('https://collector.example.test', init)
+    );
+    await expect(send('https://collector.example.test', init)).rejects.toThrow(
+      'capacity'
+    );
+    expect(mockNativeModule.sendHttp).toHaveBeenCalledTimes(4);
+    done('{"status":202}');
+    await Promise.all(requests);
   });
 
   it('initializes only native-safe settings and parses platform context', async () => {

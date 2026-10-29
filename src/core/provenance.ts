@@ -12,8 +12,8 @@ export function queueProvenance(config: ResolvedConfig): string {
       Object.entries(config.collector.headers).sort(([a], [b]) =>
         a.localeCompare(b)
       ),
-      config.identity.user?.id ?? null,
-      config.identity.tenant?.id ?? null,
+      config.identity?.user?.id ?? null,
+      config.identity?.tenant?.id ?? null,
     ])
   );
 }

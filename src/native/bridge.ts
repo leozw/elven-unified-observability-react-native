@@ -8,6 +8,7 @@ import type {
 import type { Diagnostics } from '../core/diagnostics';
 import { createEventId } from '../core/ids';
 import { queueProvenance } from '../core/provenance';
+import type { TransportFetch } from '../transport/types';
 
 interface NativeInitializationConfig {
   sessionId: string;
@@ -28,6 +29,7 @@ export class NativeBridge {
   private closingWithPurge = false;
   private rejected = false;
   private readonly pending = new Set<Promise<unknown>>();
+  private readonly httpRequests = new Map<string, () => void>();
   constructor(private readonly diagnostics: Diagnostics) {}
 
   get available(): boolean {
@@ -160,6 +162,7 @@ export class NativeBridge {
   close(purge: boolean): Promise<boolean> {
     this.closed = true;
     this.purgeRequested ||= purge;
+    for (const abort of this.httpRequests.values()) abort();
     if (!NativeModule) return Promise.resolve(true);
     if (typeof NativeModule.closeSession !== 'function')
       return Promise.resolve(false);
@@ -190,6 +193,78 @@ export class NativeBridge {
     return operation.finally(() => {
       this.pending.delete(operation);
     });
+  }
+
+  httpTransport(timeoutMillis: number): TransportFetch {
+    return async (endpoint, init) => {
+      if (
+        !this.available ||
+        !NativeModule ||
+        typeof NativeModule.sendHttp !== 'function' ||
+        typeof NativeModule.abortHttp !== 'function'
+      ) {
+        this.diagnostics.warn(
+          'Bounded native HTTP is unavailable; rebuild the app. Telemetry export is deferred, not sent through unbounded native fetch.'
+        );
+        throw new Error('Bounded native HTTP unavailable.');
+      }
+      if (this.httpRequests.size >= 4)
+        throw new Error('Native HTTP capacity reached.');
+      const module = NativeModule;
+      const requestId = createEventId();
+      const signal = init.signal as AbortSignal | undefined;
+      if (signal?.aborted) throw new Error('Telemetry request aborted.');
+      let aborted = false;
+      const abort = (): void => {
+        aborted = true;
+        try {
+          module.abortHttp(this.sessionId, requestId);
+        } catch {
+          /* Native close also cancels owned calls. */
+        }
+      };
+      this.httpRequests.set(requestId, abort);
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        const raw = await this.track(
+          module.sendHttp(
+            this.sessionId,
+            requestId,
+            endpoint,
+            JSON.stringify(init.headers),
+            init.body,
+            timeoutMillis
+          )
+        );
+        if (this.closed || aborted)
+          throw new Error('Telemetry request closed.');
+        if (raw.length > 2_048)
+          throw new Error('Oversized native HTTP acknowledgement.');
+        const result = JSON.parse(raw) as {
+          status?: number;
+          retryAfter?: string;
+        };
+        if (
+          !Number.isInteger(result.status) ||
+          result.status! < 100 ||
+          result.status! > 599
+        )
+          throw new Error('Invalid native HTTP status.');
+        return {
+          status: result.status!,
+          headers: {
+            get: (name: string) =>
+              name.toLowerCase() === 'retry-after' &&
+              typeof result.retryAfter === 'string'
+                ? result.retryAfter
+                : null,
+          },
+        };
+      } finally {
+        signal?.removeEventListener('abort', abort);
+        this.httpRequests.delete(requestId);
+      }
+    };
   }
 
   setCurrentTraceContext(value: TraceContext | undefined): void {

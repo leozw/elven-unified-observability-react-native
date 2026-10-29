@@ -158,8 +158,8 @@ export interface ResolvedCollectorConfig {
 }
 
 export interface ResolvedConfig {
-  lifecycleTimeoutMillis: number;
-  identity: {
+  lifecycleTimeoutMillis?: number;
+  identity?: {
     user?: UserContextInput | null;
     tenant?: TenantContextInput | null;
   };

@@ -138,6 +138,9 @@ internal object ElvenNativeRuntime {
   }
 
   @Synchronized
+  fun isSessionActive(id: String): Boolean = initialized && sessionId == id && !closedSessions.contains(id)
+
+  @Synchronized
   fun shutdown(): Boolean {
     stopInstrumentation()
     initialized = false

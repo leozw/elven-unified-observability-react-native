@@ -13,6 +13,7 @@ jest.mock('../NativeElvenUnifiedObservabilityReactNative', () => ({
   },
 }));
 import NativeModule from '../NativeElvenUnifiedObservabilityReactNative';
+import { Platform } from 'react-native';
 import { ElvenObservabilitySdk } from '../sdk';
 import { Diagnostics } from '../core/diagnostics';
 import { Sanitizer } from '../core/sanitizer';
@@ -43,6 +44,14 @@ const tick = async () => {
 };
 
 describe('generation fencing, consent and one lifecycle budget', () => {
+  // HTTP here exercises the JS adapter; native HTTP ownership has separate tests/runtime probes.
+  const originalPlatform = Platform.OS;
+  beforeAll(() => {
+    Object.assign(Platform, { OS: 'web' });
+  });
+  afterAll(() => {
+    Object.assign(Platform, { OS: originalPlatform });
+  });
   let file: string | undefined;
   let current = '';
   const closed = new Set<string>();

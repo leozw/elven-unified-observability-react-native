@@ -144,6 +144,12 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   return [[self shared] shutdownInternal];
 }
 
++ (BOOL)isSessionActive:(NSString *)sessionId
+{
+  ElvenNativeRuntime *runtime = [self shared];
+  @synchronized(runtime) { return runtime.initialized && [runtime.sessionId isEqualToString:sessionId] && ![runtime.closedSessions containsObject:sessionId]; }
+}
+
 + (void)closeSession:(NSString *)sessionId purge:(BOOL)purge completion:(void (^)(BOOL))completion
 {
   ElvenNativeRuntime *runtime = [self shared];
