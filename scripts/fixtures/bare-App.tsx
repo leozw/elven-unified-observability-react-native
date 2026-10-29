@@ -18,8 +18,13 @@ export default function App() {
       instrumentations: { console: false, network: false, errors: false },
     };
 
-    ElvenObservability.initialize(configuration)
+    ElvenObservability.initialize({ ...configuration, consent: 'denied' })
       .then(async () => {
+        if (!mounted) return;
+        const coldPurge = await ElvenObservability.setConsent(false, 3000);
+        if (!coldPurge.purged)
+          throw new Error('Cold native purge not acknowledged');
+        await ElvenObservability.setConsent(true, 3000);
         if (!mounted) return;
         if (
           !(globalThis as unknown as { HermesInternal?: unknown })

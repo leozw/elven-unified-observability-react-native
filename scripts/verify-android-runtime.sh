@@ -19,9 +19,30 @@ if [[ ! -f "${apk_path}" ]]; then
 fi
 
 adb wait-for-device
+if [[ "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" != "1" ]]; then
+  echo "This storage regression probe is restricted to an Android emulator." >&2
+  exit 1
+fi
+adb root
+adb wait-for-device
 adb install -r "${apk_path}"
 adb logcat -c
 adb shell am force-stop "${package_name}"
+readonly private_dir="/data/user/0/${package_name}/no_backup"
+app_uid="$(adb shell cmd package list packages -U "${package_name}" | sed -n 's/.* uid:\([0-9]*\).*/\1/p' | tr -d '\r')"
+if [[ ! "${app_uid}" =~ ^[0-9]+$ ]]; then
+  echo "Could not resolve the isolated test application UID." >&2
+  exit 1
+fi
+adb shell mkdir -p "${private_dir}"
+adb shell chown "${app_uid}:${app_uid}" "${private_dir}"
+for base in elven-observability-queue-v1.json elven-observability-native-crash-v1.json; do
+  for suffix in '' .bak .new; do
+    adb shell touch "${private_dir}/${base}${suffix}"
+    adb shell chown "${app_uid}:${app_uid}" "${private_dir}/${base}${suffix}"
+  done
+done
+adb shell restorecon -R "${private_dir}"
 adb shell monkey -p "${package_name}" -c android.intent.category.LAUNCHER 1
 
 for _attempt in $(seq 1 60); do
@@ -29,7 +50,12 @@ for _attempt in $(seq 1 60); do
   window_xml="$(adb shell cat "${window_dump}" 2>/dev/null || true)"
 
   if grep -Fq "${expected_status}" <<<"${window_xml}"; then
-    echo "React Native 0.79.2 Legacy native bridge is ready."
+    for base in elven-observability-queue-v1.json elven-observability-native-crash-v1.json; do
+      for suffix in '' .bak .new; do
+        adb shell test ! -e "${private_dir}/${base}${suffix}"
+      done
+    done
+    echo "React Native 0.79.2 Legacy Hermes lifecycle and cold AtomicFile purge passed."
     exit 0
   fi
 

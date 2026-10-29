@@ -480,7 +480,13 @@ export class ElvenObservabilitySdk {
           revoke: (timeout?: number) =>
             this.shutdown(timeout, { flush: false, purge: true }),
         };
-        if (acquireOwner(lease)) this.lease = lease;
+        if (acquireOwner(lease)) {
+          this.lease = lease;
+          this.closingResources = undefined;
+          this.startingBridge = new NativeBridge(
+            new Diagnostics({ enabled: false, verbose: false })
+          );
+        }
       }
       if (!this.startingBridge)
         this.startingBridge = new NativeBridge(

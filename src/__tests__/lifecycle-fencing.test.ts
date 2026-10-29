@@ -197,6 +197,18 @@ describe('generation fencing, consent and one lifecycle budget', () => {
     await sdk.shutdown(20, { flush: false, purge: true });
   });
 
+  it('allows repeated cold denial without retaining a lease from an already-closed bridge', async () => {
+    const sdk = new ElvenObservabilitySdk();
+    await sdk.initialize({ ...config(), consent: 'denied' });
+    expect((await sdk.setConsent(false, 20)).purged).toBe(true);
+    expect(activeOwner()).toBeUndefined();
+    await sdk.setConsent(true, 20);
+    expect(sdk.health().state).toBe('started');
+    await sdk.setConsent(false, 20);
+    expect((await sdk.setConsent(false, 20)).purged).toBe(true);
+    expect(activeOwner()).toBeUndefined();
+  });
+
   it('aborts an in-flight request on revoke and ignores its late successful completion', async () => {
     const gate = deferred<Response>();
     let signal: AbortSignal | undefined;

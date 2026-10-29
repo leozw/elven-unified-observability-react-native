@@ -128,7 +128,7 @@ internal object ElvenNativeRuntime {
     if (config.captureNativeCrashes) {
       restorePreviousCrash(app)
     } else {
-      File(app.noBackupFilesDir, CRASH_FILE).delete()
+      deleteAtomicFile(File(app.noBackupFilesDir, CRASH_FILE))
     }
     if (config.captureLifecycle) startLifecycle(app, activeGeneration)
     if (config.captureNativeCrashes) startCrashHandler(app)
@@ -146,7 +146,7 @@ internal object ElvenNativeRuntime {
   }
 
   @Synchronized
-  fun closeSession(id: String, purge: Boolean, callback: (Boolean) -> Unit) {
+  fun closeSession(reactContext: ReactApplicationContext, id: String, purge: Boolean, callback: (Boolean) -> Unit) {
     closedSessions.add(id)
     if (closedSessions.size > 64) closedSessions.firstOrNull { it != id }?.let(closedSessions::remove)
     if (sessionId != null && sessionId != id) { callback(false); return }
@@ -154,14 +154,16 @@ internal object ElvenNativeRuntime {
     sessionId = null
     traceContext.set(null)
     synchronized(eventLock) { events.clear() }
-    val app = application
+    // Cold-denied startup has not initialized collection, but must still erase old files.
+    val app = application ?: reactContext.applicationContext as? Application
     mainHandler.post { ioExecutor.execute {
       synchronized(fileLock) {
         if (sessionId != null) { callback(false); return@synchronized }
-        val queue = app?.let(::queueFile)
-        val crash = app?.let { File(it.noBackupFilesDir, CRASH_FILE) }
-        callback(!purge || ((queue == null || !queue.exists() || queue.delete()) &&
-          (crash == null || !crash.exists() || crash.delete())))
+        if (!purge) { callback(true); return@synchronized }
+        if (app == null) { callback(false); return@synchronized }
+        val queueCleared = deleteAtomicFile(queueFile(app))
+        val crashCleared = deleteAtomicFile(File(app.noBackupFilesDir, CRASH_FILE))
+        callback(queueCleared && crashCleared)
       }
     } }
   }
@@ -200,15 +202,16 @@ internal object ElvenNativeRuntime {
   }
 
   fun writePersistedQueue(value: String, callback: (Boolean) -> Unit) {
-    val writingSession = runCatching { org.json.JSONObject(value).optString("ownerGeneration") }.getOrDefault("")
     val app = application
     if (
       app == null ||
+      value.length > MAX_PERSISTED_QUEUE_BYTES ||
       value.toByteArray(StandardCharsets.UTF_8).size > MAX_PERSISTED_QUEUE_BYTES
     ) {
       callback(false)
       return
     }
+    val writingSession = runCatching { org.json.JSONObject(value).optString("ownerGeneration") }.getOrDefault("")
     ioExecutor.execute {
       if (!initialized || writingSession != sessionId) { callback(false); return@execute }
       callback(runCatching { writeQueueFile(app, value) }.getOrDefault(false))
@@ -226,8 +229,7 @@ internal object ElvenNativeRuntime {
       if (!initialized || clearingSession != sessionId) { callback(false); return@execute }
       callback(
         synchronized(fileLock) {
-          val file = queueFile(app)
-          !file.exists() || file.delete()
+          deleteAtomicFile(queueFile(app))
         }
       )
     }
@@ -624,6 +626,15 @@ internal object ElvenNativeRuntime {
     }
 
   private fun queueFile(app: Application): File = File(app.noBackupFilesDir, QUEUE_FILE)
+
+  private fun deleteAtomicFile(file: File): Boolean = runCatching {
+    AtomicFile(file).delete()
+    val legacyBackup = File(file.path + ".bak")
+    val pendingWrite = File(file.path + ".new")
+    if (legacyBackup.exists()) legacyBackup.delete()
+    if (pendingWrite.exists()) pendingWrite.delete()
+    !file.exists() && !legacyBackup.exists() && !pendingWrite.exists()
+  }.getOrDefault(false)
 
   private fun calculateProcessStartUnixMillis(): Long {
     val elapsed = max(

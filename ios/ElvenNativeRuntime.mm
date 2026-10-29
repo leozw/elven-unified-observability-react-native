@@ -620,7 +620,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
     if ([payload.timeStampBegin compare:self.sessionStartedAt] == NSOrderedAscending) continue;
     NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
     if (payload.cpuMetrics) attributes[@"metrickit.cpu.seconds"] = @(payload.cpuMetrics.cumulativeCPUTime.doubleValue);
-    if (payload.memoryMetrics) attributes[@"metrickit.memory.peak"] = @(payload.memoryMetrics.peakMemory.doubleValue);
+    if (payload.memoryMetrics) attributes[@"metrickit.memory.peak"] = @(payload.memoryMetrics.peakMemoryUsage.doubleValue);
     [self recordEventWithType:@"performance" name:@"ios.metrickit.metrics" durationMillis:nil attributes:attributes timestampUnixMillis:nil];
   }
  }
