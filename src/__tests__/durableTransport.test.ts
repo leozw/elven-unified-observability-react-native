@@ -200,6 +200,34 @@ describe('DurableTransport', () => {
     await transport.shutdown(1_000);
   });
 
+  it('isolates a throwing platform abort from the export timeout callback', async () => {
+    const platform = globalThis as unknown as {
+      AbortController?: new () => { signal: unknown; abort(): void };
+    };
+    const previous = platform.AbortController;
+    platform.AbortController = class {
+      readonly signal = {};
+      abort(): void {
+        throw new Error('broken platform abort');
+      }
+    };
+    const transport = new DurableTransport(
+      resolvedConfiguration(),
+      new MemoryStore(),
+      diagnostics(),
+      () => new Promise(() => undefined)
+    );
+    try {
+      await transport.enqueue('logs', 'pending');
+      const flush = transport.flush(true, 5);
+      await jest.advanceTimersByTimeAsync(5);
+      expect((await flush).timedOut).toBe(true);
+      transport.stop(true);
+    } finally {
+      platform.AbortController = previous;
+    }
+  });
+
   it('discards corrupt persisted state and retains only valid, unexpired items', async () => {
     const messages: string[] = [];
     const store = new MemoryStore('{not-json');

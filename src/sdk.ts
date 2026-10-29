@@ -98,15 +98,36 @@ export class ElvenObservabilitySdk {
   initialize(
     configuration: UnifiedObservabilityConfig
   ): Promise<ElvenObservabilitySdk> {
+    return this.initializeWithin(
+      configuration,
+      this.lifecycleBudget(configuration.lifecycleTimeoutMillis)
+    );
+  }
+
+  private lifecycleBudget(timeoutMillis = 5_000): LifecycleDeadline {
+    return new LifecycleDeadline(timeoutMillis, () =>
+      this.fence(true, this.runtime ?? this.stoppingRuntime)
+    );
+  }
+
+  private initializeWithin(
+    configuration: UnifiedObservabilityConfig,
+    deadline: LifecycleDeadline
+  ): Promise<ElvenObservabilitySdk> {
     if (configuration.consent === 'denied') {
       this.lastConfiguration = configuration;
-      return this.setConsent(false, configuration.lifecycleTimeoutMillis).then(
-        () => this
-      );
+      return this.setConsent(false, deadline.remaining()).then(() => this);
     }
     if (this.state === 'started') return Promise.resolve(this);
     if (this.shutdownOperation) {
-      return this.shutdownOperation.then(() => this.initialize(configuration));
+      return deadline
+        .wait(this.shutdownOperation)
+        .then(() => this.initializeWithin(configuration, deadline))
+        .catch((error: unknown) => {
+          reportInitializationFailure(error, configuration);
+          if (configuration.strictInitialization) throw error;
+          return this;
+        });
     }
     if (this.initialization) return this.initialization;
     this.lastConfiguration = configuration;
@@ -151,18 +172,14 @@ export class ElvenObservabilitySdk {
     this.disabledReason = undefined;
     const generation = ++this.generation;
     this.state = 'starting';
-    const deadline = new LifecycleDeadline(
-      configuration.lifecycleTimeoutMillis ?? 5_000,
-      () => this.fence(true)
-    );
     const starting = this.start(configuration, generation);
     this.startWork = starting;
     this.initialization = deadline
       .wait(starting)
       .then(() => this)
-      .catch(async (error: unknown) => {
-        const cleanup = this.fence(true);
-        Promise.allSettled([starting, cleanup]).then(() => releaseOwner(lease));
+      .catch((error: unknown) => {
+        // fence retains the lease unless actual native/provider cleanup succeeds.
+        this.fence(true);
         this.state = 'stopped';
         reportInitializationFailure(error, configuration);
         if (configuration.strictInitialization) throw error;
@@ -472,9 +489,12 @@ export class ElvenObservabilitySdk {
       return this.shutdown(timeoutMillis, { flush: false, purge: true });
     }
     return this.lastConfiguration
-      ? this.initialize({ ...this.lastConfiguration, consent: 'granted' }).then(
-          () => emptyFlushResult()
-        )
+      ? this.initializeWithin(
+          { ...this.lastConfiguration, consent: 'granted' },
+          this.lifecycleBudget(
+            timeoutMillis ?? this.lastConfiguration.lifecycleTimeoutMillis
+          )
+        ).then(() => emptyFlushResult())
       : Promise.resolve(emptyFlushResult());
   }
 
@@ -495,9 +515,23 @@ export class ElvenObservabilitySdk {
   ): Promise<void> {
     const epoch = ++this.configurationEpoch;
     this.lastConfiguration = configuration;
-    await this.shutdown(timeoutMillis, { flush: false, purge: true });
-    if (epoch === this.configurationEpoch && this.consentGranted)
-      await this.initialize(configuration);
+    const budget = this.lifecycleBudget(
+      timeoutMillis ?? configuration.lifecycleTimeoutMillis
+    );
+    try {
+      const closed = await budget.wait(
+        this.shutdown(budget.remaining(), { flush: false, purge: true })
+      );
+      if (
+        closed.purged === true &&
+        epoch === this.configurationEpoch &&
+        this.consentGranted
+      )
+        await this.initializeWithin(configuration, budget);
+    } catch (error) {
+      reportInitializationFailure(error, configuration);
+      if (configuration.strictInitialization) throw error;
+    }
   }
 
   private fence(purge: boolean, runtime = this.runtime): Promise<boolean> {

@@ -343,7 +343,11 @@ export class DurableTransport {
       });
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
-          controller?.abort();
+          try {
+            controller?.abort();
+          } catch {
+            /* A broken platform abort must not escape the timer callback. */
+          }
           reject(new Error('Telemetry export timed out.'));
         }, timeoutMillis);
       });

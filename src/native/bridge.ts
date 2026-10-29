@@ -78,8 +78,9 @@ export class NativeBridge {
         return { platform: 'unknown' };
       }
       if (
+        value.length > 16_384 ||
         (JSON.parse(value) as { sessionId?: string }).sessionId !==
-        this.sessionId
+          this.sessionId
       ) {
         this.rejected = true;
         this.diagnostics.warn(

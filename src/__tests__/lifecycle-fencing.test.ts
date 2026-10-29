@@ -22,7 +22,7 @@ import {
   resolvedConfiguration,
 } from '../__fixtures__/testConfig';
 import type { UnifiedObservabilityConfig } from '../types';
-import { setGlobalConsent } from '../core/lifecycle';
+import { activeOwner, releaseOwner, setGlobalConsent } from '../core/lifecycle';
 
 const native = NativeModule as unknown as Record<string, jest.Mock>;
 const deferred = <T>() => {
@@ -124,6 +124,57 @@ describe('generation fencing, consent and one lifecycle budget', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(native.writePersistedQueue!.mock.calls.length).toBe(writes);
     expect(sdk.health().state).toBe('stopped');
+    await tick();
+  });
+
+  it('does not release a timed-out initializer lease when native cleanup rejects ownership', async () => {
+    const gate = deferred<string>();
+    native.initialize!.mockReturnValueOnce(gate.promise);
+    native.closeSession!.mockResolvedValue(false);
+    const sdk = new ElvenObservabilitySdk();
+    try {
+      const starting = sdk.initialize(config());
+      await jest.advanceTimersByTimeAsync(20);
+      await starting;
+      gate.resolve('{}');
+      await tick();
+      const replacement = new ElvenObservabilitySdk();
+      await replacement.initialize(config());
+      expect(replacement.health().disabledReason).toContain('another-owner');
+      expect(native.initialize).toHaveBeenCalledTimes(1);
+    } finally {
+      // Test-only reset: production deliberately quarantines unacknowledged cleanup.
+      const owner = activeOwner();
+      if (owner) releaseOwner(owner);
+    }
+  });
+
+  it('shares a configuration-transition budget across purge and replacement initialization', async () => {
+    const sdk = new ElvenObservabilitySdk();
+    await sdk.initialize(config());
+    native.closeSession!.mockImplementationOnce(
+      (id: string) =>
+        new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            closed.add(id);
+            current = '';
+            file = undefined;
+            resolve(true);
+          }, 12);
+        })
+    );
+    const gate = deferred<string>();
+    native.initialize!.mockReturnValueOnce(gate.promise);
+    let finished = false;
+    const transition = sdk.reconfigure(config(), 20).then(() => {
+      finished = true;
+    });
+    await jest.advanceTimersByTimeAsync(19);
+    expect(finished).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    await transition;
+    expect(sdk.health().state).toBe('stopped');
+    gate.resolve('{}');
     await tick();
   });
 
