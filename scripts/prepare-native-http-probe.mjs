@@ -29,7 +29,7 @@ await mkdir(path.join(main, 'res/xml'), { recursive: true });
 // Only the isolated emulator's loopback fake collector is cleartext. TLS remains required elsewhere.
 await writeFile(
   path.join(main, 'res/xml/elven_probe_network_security.xml'),
-  '<network-security-config><base-config cleartextTrafficPermitted="false"/><domain-config cleartextTrafficPermitted="true"><domain>127.0.0.1</domain></domain-config></network-security-config>'
+  '<network-security-config><base-config cleartextTrafficPermitted="false"/><domain-config cleartextTrafficPermitted="true"><domain includeSubdomains="false">127.0.0.1</domain></domain-config></network-security-config>'
 );
 const applications = (
   await readdir(path.join(main, 'java'), { recursive: true })
