@@ -28,6 +28,8 @@ Revocation and identity/destination changes synchronously close collection and t
 
 `setIdentity` and `reconfigure` are awaitable transitions. Existing void context identity setters initiate the same transition and remain callable; events during the transition are intentionally dropped. This privacy-related data loss is preferable to sending previous-user batches under new credentials. `context.clear()` now uses a no-send identity transition. Reconfigure headers for token renewal; there is no automatic 401 refresh.
 
+401 and other permanent HTTP failures drop the affected batch. Background retries use bounded attempts, exponential jitter and a circuit breaker; `Retry-After` is capped by `retry.maxDelayMillis`, not treated as an unlimited server minimum. Explicit flush (including background/AppState flush) retains its existing force behavior and can bypass scheduling/circuit delays, with at most one attempt per queued batch per transport flush. Avoid high-frequency manual flush loops; configure ingest-only credentials, gateway rate limits and tenancy enforcement outside the mobile bundle.
+
 ## One Deadline And Owner
 
 The default lifecycle budget is 5000ms, capped at 30000ms, configurable through `lifecycleTimeoutMillis`. An explicit flush/shutdown timeout uses one budget across provider, native and storage phases, not a fresh timeout per phase. JS event-loop/OS scheduling delays and application callbacks cannot be preempted by a timer.
