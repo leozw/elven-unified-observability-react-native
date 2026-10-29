@@ -133,11 +133,25 @@ describe('privacy sanitizer', () => {
   const sanitizer = new Sanitizer(config.privacy);
 
   it('rejects ambiguous long tokens before URL/email regex searches', () => {
-    for (const suffix of ['', '@example.test', '://@example.test']) {
+    for (const suffix of [
+      '',
+      '@example.test',
+      ' @x.y',
+      '://@example.test',
+      ': //user:pass@x.y',
+      '://user:pass@x.y',
+    ]) {
       const value = 'a.'.repeat(32_750) + suffix;
       expect(redactTextContent(value)).toBe('[OVERSIZE]');
       expect(sanitizer.message(value)).toBe('[OVERSIZE]');
+      expect(sanitizer.url(value)).toBe('[OVERSIZE]');
     }
+    expect(redactTextContent('a://'.repeat(16_000) + 'user:pass@x.y')).toBe(
+      '[OVERSIZE]'
+    );
+    expect(
+      redactTextContent('a: //'.repeat(10_000) + 'user:pass@x.y')
+    ).not.toContain('user:pass@');
   });
 
   it('drops whole fields instead of leaving quoted credential fragments', () => {

@@ -9,15 +9,20 @@ const MAX_INPUT_CHARS = 65_536;
 const MAX_TOKEN_CHARS = 1_024;
 const WHITESPACE = /\s/;
 
-export function redactTextContent(value: string): string {
-  if (value.length > MAX_INPUT_CHARS) return '[OVERSIZE]';
+export function isRedactionInputBounded(value: string): boolean {
+  if (value.length > MAX_INPUT_CHARS) return false;
   let tokenLength = 0;
   // Bound ambiguous URL/email searches before regex work. Drop the whole field,
   // not a token fragment that could expose part of a quoted credential.
   for (let index = 0; index < value.length; index += 1) {
     tokenLength = WHITESPACE.test(value.charAt(index)) ? 0 : tokenLength + 1;
-    if (tokenLength > MAX_TOKEN_CHARS) return '[OVERSIZE]';
+    if (tokenLength > MAX_TOKEN_CHARS) return false;
   }
+  return true;
+}
+
+export function redactTextContent(value: string): string {
+  if (!isRedactionInputBounded(value)) return '[OVERSIZE]';
   return value
     .replace(URL_USER_INFO, '$1[REDACTED]@')
     .replace(AUTHORIZATION_VALUE, '$1 [REDACTED]')

@@ -1,6 +1,6 @@
 import type { Attributes } from '@opentelemetry/api';
 import { DEFAULT_REDACT_KEYS, REDACTED_VALUE } from './constants';
-import { redactTextContent } from './redaction';
+import { isRedactionInputBounded, redactTextContent } from './redaction';
 import type { AttributeInput, AttributeInputs, ResolvedConfig } from '../types';
 
 const MAX_DEPTH = 4;
@@ -146,7 +146,7 @@ export class Sanitizer {
   }
 
   url(value: string): string {
-    if (typeof value !== 'string' || value.length > MAX_INPUT_CHARS)
+    if (typeof value !== 'string' || !isRedactionInputBounded(value))
       return OVERSIZE;
     const fallback = this.text(
       value.split(/[?#]/, 1)[0] ?? '',
