@@ -1,0 +1,51 @@
+name: Focused iOS HTTP runtime qualification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/native-http-probe.yml
+      - scripts/verify-ios-http-runtime.sh
+      - scripts/assert-ios-probe-artifact.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  ios-http-runtime:
+    name: Pinned RN 0.79.2 Legacy iOS HTTP runtime
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Verify unchanged compiled inputs and immutable artifact provenance
+        run: node scripts/assert-ios-probe-artifact.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: '12930457127'
+          path: runtime-ios
+          run-id: 40945422501
+          github-token: ${{ github.token }}
+      - run: bash scripts/verify-ios-http-runtime.sh runtime-ios
+      - name: Upload probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: focused-ios-http-diagnostics
+          if-no-files-found: warn
+          path: |
+            artifacts/native-http-artifact-provenance.json
+            native-http-collector.log
+            native-http-stats.json
+            native-http-probe.png
