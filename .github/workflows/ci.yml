@@ -68,6 +68,9 @@ jobs:
       - name: Validate native scope classifier
         run: node scripts/native-ci-scope.test.mjs
 
+      - name: Verify Legacy and Turbo native export contract
+        run: node scripts/check-native-exports.mjs
+
       - name: Run complete validation
         run: node .yarn/releases/yarn-4.11.0.cjs validate
 
@@ -372,24 +375,51 @@ jobs:
           path: example/ios/build/Build/Products/Release-iphonesimulator/*.app
 
   bare-rn-0792-legacy-ios-http-runtime:
-    name: Bare RN 0.79.2 Legacy iOS HTTP runtime
-    needs: bare-rn-079-ios-release
-    runs-on: macos-15
+    name: Native iOS HTTP runtime ${{ matrix.consumer }}
+    needs: [bare-rn-079-ios-release, bare-ios-release]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - consumer: rn0792-legacy
+            artifact: bare-rn-0792-legacy-ios-release-simulator
+            runner: macos-15
+            xcode: Xcode_16.4
+          - consumer: rn0797-turbo
+            artifact: bare-rn-0797-new-ios-release-simulator
+            runner: macos-15
+            xcode: Xcode_16.4
+          - consumer: rn087-turbo
+            artifact: bare-rn-087-ios-release-simulator
+            runner: macos-26
+            xcode: Xcode_26.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+      - run: sudo xcode-select --switch /Applications/${{ matrix.xcode }}.app/Contents/Developer
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           package-manager-cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: bare-rn-0792-legacy-ios-release-simulator
+          name: ${{ matrix.artifact }}
           path: runtime-ios
       - run: bash scripts/verify-ios-http-runtime.sh runtime-ios
+      - name: Preserve native HTTP runtime readback
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-http-${{ matrix.consumer }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            native-http-stats.json
+            native-http-probe.png
+            native-http-collector.log
 
   bare-ios-release:
     needs: native-scope

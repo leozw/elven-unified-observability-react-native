@@ -22,11 +22,13 @@ internal class ElvenHttpTransport(private val context: ReactApplicationContext) 
 
   @Synchronized
   fun send(session: String, id: String, endpoint: String, headersJson: String, body: String, timeout: Double, promise: Promise) {
+    var phase = "owner"
     try {
       check(ElvenNativeRuntime.isSessionActive(session) && !closed.contains(session))
       require(pending.size < 4 && !pending.containsKey(id) && id.length <= 128)
       require(endpoint.length <= 16_384 && headersJson.length <= 65_536 && body.length <= 4_194_304)
       require(timeout.isFinite() && timeout >= 1 && timeout <= 30_000)
+      phase = "rn-client"
       val networking = checkNotNull(context.getNativeModule(NetworkingModule::class.java))
       // RN has no public getter for its effective client or per-request security hook.
       // These two version-qualified accesses fail closed; consumer rules retain their names.
@@ -35,11 +37,13 @@ internal class ElvenHttpTransport(private val context: ReactApplicationContext) 
       } ?: error("Unsupported RN HTTP client")
       clientField.isAccessible = true
       val builder = (clientField.get(networking) as OkHttpClient).newBuilder()
+      phase = "rn-security-hook"
       val customField = NetworkingModule::class.java.getDeclaredField("customClientBuilder")
       customField.isAccessible = true
       (customField.get(null) as? CustomClientBuilder)?.apply(builder)
       val client = builder.cookieJar(CookieJar.NO_COOKIES).cache(null)
         .callTimeout(timeout.toLong(), TimeUnit.MILLISECONDS).build()
+      phase = "request"
       val request = Request.Builder().url(endpoint)
       require(ElvenOkHttpCompat.scheme(request.build()) == "http" || ElvenOkHttpCompat.scheme(request.build()) == "https")
       val headers = JSONObject(headersJson)
@@ -60,9 +64,9 @@ internal class ElvenHttpTransport(private val context: ReactApplicationContext) 
           } catch (_: Exception) { call.cancel(); response.close(); finish(id, null) }
         }
       })
-    } catch (_: Exception) {
+    } catch (error: Exception) {
       pending.remove(id)?.call?.cancel()
-      promise.reject("ELVEN_HTTP_UNAVAILABLE", "Bounded native HTTP could not preserve the RN networking configuration.")
+      promise.reject("ELVEN_HTTP_UNAVAILABLE", "Bounded native HTTP unavailable ($phase/${error.javaClass.simpleName}).")
     }
   }
 

@@ -51,8 +51,23 @@ async function probeNativeHttp(): Promise<string> {
   await ElvenObservability.initialize(configuration);
   ElvenObservability.logs.error('native bounded response probe');
   const result = await ElvenObservability.flush(3000);
-  if (result.delivered < 1)
-    throw new Error('Bounded native export did not deliver');
+  const deliveredHealth = ElvenObservability.health();
+  const deliveryStats = (await (await fetch(`${endpoint}/stats`)).json()) as {
+    payloadSeen: Record<string, boolean>;
+    cancelled: Record<string, boolean>;
+  };
+  // Background flush can win the race. Require actual collector payload + SDK ACK,
+  // no pending/dropped batches, and early response cancellation, not a per-flush counter guess.
+  if (
+    !deliveredHealth.lastSuccessfulExportUnixMillis ||
+    result.pending !== 0 ||
+    deliveredHealth.droppedItems !== 0 ||
+    !deliveryStats.payloadSeen['/bounded/v1/logs'] ||
+    !deliveryStats.cancelled['/bounded/v1/logs']
+  )
+    throw new Error(
+      `Bounded native export not acknowledged: ${JSON.stringify({ result, health: deliveredHealth, deliveryStats })}`
+    );
   await ElvenObservability.reconfigure(
     {
       ...configuration,

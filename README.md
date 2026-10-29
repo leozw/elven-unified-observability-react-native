@@ -107,7 +107,7 @@ For local HTTP Collector testing, Android emulators can use `10.0.2.2` or `adb r
 
 ## iOS
 
-Autolinking and CocoaPods install the Objective-C++ Native Module. React Native 0.79.x is validated with both Legacy registration and the generated TurboModule path:
+Autolinking and CocoaPods install the Objective-C++ Native Module. The same native selectors are exported additively through Legacy registration and the generated TurboModule path. The audit candidate corrects missing Legacy exports found by a real 0.79.2 simulator probe; this requires a new native binary, not an OTA-only update. Fresh Legacy and Turbo build/runtime qualification is a release gate:
 
 ```sh
 npx pod-install
@@ -138,7 +138,7 @@ Installing or upgrading this SDK changes native code. Create a new binary and us
 
 ### Expo Go
 
-Expo Go cannot contain arbitrary third-party native modules. The SDK does not crash: JS logs, metrics, traces, fetch/XHR, JS errors, and AppState continue to work, while native crashes, ANR/hang, frames, device metadata, and durable native storage are unavailable. `health().nativeBridgeAvailable` reports `false`.
+Expo Go cannot contain arbitrary third-party native modules. JS instrumentation can continue to record in the bounded in-memory queue, but native crashes, ANR/hang, frames, device metadata, and durable native storage are unavailable. `health().nativeBridgeAvailable` reports `false`. The audit candidate also defers mobile export when the bounded native HTTP adapter is missing; Expo Go is therefore not an export-qualified replacement for a rebuilt Development Build. Web export remains available. This deliberate migration tradeoff avoids falling back to native fetch's full collector-response buffering.
 
 ## Automatic instrumentation
 

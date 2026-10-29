@@ -10,6 +10,7 @@ const state = {
   bytes: {},
   proof: null,
   hooks: {},
+  payloadSeen: {},
 };
 const server = http.createServer((request, response) => {
   const path = new URL(request.url, 'http://127.0.0.1').pathname;
@@ -25,8 +26,34 @@ const server = http.createServer((request, response) => {
   }
   state.requests[path] = (state.requests[path] ?? 0) + 1;
   state.hooks[path] = request.headers['x-elven-probe-hook'] === 'preserved';
-  request.resume();
+  let body = '';
+  let oversized = false;
+  request.setEncoding('utf8');
+  request.on('data', (data) => {
+    if (oversized) return;
+    if (body.length + data.length <= 131072) body += data;
+    else {
+      body = '';
+      oversized = true;
+    }
+  });
   request.on('end', () => {
+    if (request.method === 'POST' && body) {
+      try {
+        const payload = JSON.parse(body);
+        state.payloadSeen[path] ||= (payload.resourceLogs ?? []).some(
+          (resource) =>
+            (resource.scopeLogs ?? []).some((scope) =>
+              (scope.logRecords ?? []).some(
+                (record) =>
+                  record.body?.stringValue === 'native bounded response probe'
+              )
+            )
+        );
+      } catch {
+        state.payloadSeen[path] ??= false;
+      }
+    }
     if (path.startsWith('/hang/')) {
       response.on('close', () => {
         state.cancelled[path] = true;
@@ -71,7 +98,7 @@ const server = http.createServer((request, response) => {
 server.requestTimeout = 10_000;
 server.headersTimeout = 10_000;
 server.listen(Number(process.argv[2] ?? 4319), '127.0.0.1', () => {
-  console.log('ELVEN_NATIVE_HTTP_COLLECTOR_READY');
+  console.log(`ELVEN_NATIVE_HTTP_COLLECTOR_READY:${server.address().port}`);
 });
 const stop = () => {
   server.closeAllConnections();
