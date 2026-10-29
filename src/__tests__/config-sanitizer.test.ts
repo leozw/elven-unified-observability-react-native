@@ -4,6 +4,7 @@ import { DynamicTelemetryContext } from '../core/dynamicContext';
 import { queueProvenance } from '../core/provenance';
 import type { ResolvedConfig } from '../types';
 import { Sanitizer } from '../core/sanitizer';
+import { redactTextContent } from '../core/redaction';
 import {
   matchesUrl,
   monotonicNow,
@@ -130,6 +131,27 @@ describe('privacy sanitizer', () => {
     },
   });
   const sanitizer = new Sanitizer(config.privacy);
+
+  it('rejects ambiguous long tokens before URL/email regex searches', () => {
+    for (const suffix of ['', '@example.test', '://@example.test']) {
+      const value = 'a.'.repeat(32_750) + suffix;
+      expect(redactTextContent(value)).toBe('[OVERSIZE]');
+      expect(sanitizer.message(value)).toBe('[OVERSIZE]');
+    }
+  });
+
+  it('drops whole fields instead of leaving quoted credential fragments', () => {
+    const value = `before password="${'x'.repeat(1_025)} remaining-secret" after`;
+    expect(redactTextContent(value)).toBe('[OVERSIZE]');
+    expect(redactTextContent('x'.repeat(1_024))).toBe('x'.repeat(1_024));
+    expect(redactTextContent('x'.repeat(1_025))).toBe('[OVERSIZE]');
+    expect(redactTextContent('ok '.repeat(22_000))).toBe('[OVERSIZE]');
+    expect(
+      redactTextContent(
+        'before password="secret value" person@example.test after'
+      )
+    ).toBe('before password=[REDACTED] [REDACTED] after');
+  });
 
   it('flattens bounded attributes and redacts nested sensitive data', () => {
     const circular: Record<string, unknown> = {};
