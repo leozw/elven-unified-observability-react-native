@@ -9,10 +9,8 @@ import java.util.concurrent.TimeUnit
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.CookieJar
-import okhttp3.MediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.Response
 import org.json.JSONObject
 
@@ -43,17 +41,17 @@ internal class ElvenHttpTransport(private val context: ReactApplicationContext) 
       val client = builder.cookieJar(CookieJar.NO_COOKIES).cache(null)
         .callTimeout(timeout.toLong(), TimeUnit.MILLISECONDS).build()
       val request = Request.Builder().url(endpoint)
-      require(request.build().url().scheme() == "http" || request.build().url().scheme() == "https")
+      require(ElvenOkHttpCompat.scheme(request.build()) == "http" || ElvenOkHttpCompat.scheme(request.build()) == "https")
       val headers = JSONObject(headersJson)
       require(headers.length() <= 128)
       for (key in headers.keys()) request.header(key, headers.getString(key))
-      val call = client.newCall(request.post(RequestBody.create(MediaType.parse("application/json"), body)).build())
+      val call = client.newCall(request.post(ElvenOkHttpCompat.body(body)).build())
       pending[id] = Pending(session, call, promise)
       call.enqueue(object : Callback {
         override fun onFailure(call: Call, error: IOException) { finish(id, null) }
         override fun onResponse(call: Call, response: Response) {
           try {
-            val result = JSONObject().put("status", response.code())
+            val result = JSONObject().put("status", ElvenOkHttpCompat.status(response))
             response.header("Retry-After")?.let { result.put("retryAfter", if (it.length > 256) "9".repeat(257) else it) }
             // Cancel before close: do not drain or decode an arbitrary collector response.
             call.cancel()

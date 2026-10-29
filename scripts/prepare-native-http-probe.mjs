@@ -1,6 +1,12 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
+import { createRequire } from 'node:module';
+
+const example = createRequire(
+  new URL('../example/package.json', import.meta.url)
+);
+const plist = createRequire(example.resolve('@expo/plist/package.json'));
+const { DOMParser, XMLSerializer } = plist('@xmldom/xmldom');
 
 const root = process.argv[2];
 if (!root) throw new Error('Pass the isolated generated consumer directory.');

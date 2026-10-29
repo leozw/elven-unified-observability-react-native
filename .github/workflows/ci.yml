@@ -14,10 +14,30 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
+  native-scope:
+    name: Classify native qualification inputs
+    runs-on: ubuntu-latest
+    outputs:
+      ios: ${{ steps.scope.outputs.ios }}
+      android: ${{ steps.scope.outputs.android }}
+      android-fixture: ${{ steps.scope.outputs.android-fixture }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: scope
+        env:
+          SCOPE_BASE: ${{ github.event.before || github.event.pull_request.base.sha }}
+          SCOPE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node scripts/native-ci-scope.mjs
+
   ios-native-lifecycle:
+    needs: native-scope
+    if: needs.native-scope.outputs.ios == 'true'
     name: iOS simulator lifecycle and storage fence
     runs-on: macos-26
     timeout-minutes: 15
@@ -44,6 +64,9 @@ jobs:
 
       - name: Verify local security mitigations without suppressing the audit
         run: node .yarn/releases/yarn-4.11.0.cjs security:mitigations
+
+      - name: Validate native scope classifier
+        run: node scripts/native-ci-scope.test.mjs
 
       - name: Run complete validation
         run: node .yarn/releases/yarn-4.11.0.cjs validate
@@ -95,6 +118,8 @@ jobs:
         run: docker compose -f example/docker-compose.yml down --volumes
 
   android-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.android == 'true'
     name: Expo 57 Android release
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +152,8 @@ jobs:
           path: example/android/app/build/outputs/apk/release/*.apk
 
   bare-android-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.android == 'true'
     name: Bare RN 0.87 Android release
     runs-on: ubuntu-latest
     env:
@@ -177,6 +204,8 @@ jobs:
           path: ${{ github.workspace }}/.bare-validation/android/app/build/outputs/apk/release/*.apk
 
   bare-rn-079-android-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.android == 'true' || needs.native-scope.outputs.android-fixture == 'true'
     name: Bare RN ${{ matrix.react-native }} ${{ matrix.architecture }} Android release
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -295,6 +324,8 @@ jobs:
           script: bash scripts/verify-android-runtime.sh runtime-apk/app-release.apk
 
   ios-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.ios == 'true'
     name: Expo 57 iOS release simulator
     runs-on: macos-26
     env:
@@ -361,6 +392,8 @@ jobs:
       - run: bash scripts/verify-ios-http-runtime.sh runtime-ios
 
   bare-ios-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.ios == 'true'
     name: Bare RN 0.87 iOS release simulator
     runs-on: macos-26
     env:
@@ -434,6 +467,8 @@ jobs:
           path: ${{ github.workspace }}/.bare-validation/ios/build/Build/Products/Release-iphonesimulator/*.app
 
   bare-rn-079-ios-release:
+    needs: native-scope
+    if: needs.native-scope.outputs.ios == 'true'
     name: Bare RN ${{ matrix.react-native }} ${{ matrix.architecture }} iOS release simulator
     runs-on: macos-15
     timeout-minutes: 60

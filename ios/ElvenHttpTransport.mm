@@ -8,6 +8,7 @@
 // Version-qualified RN selector: preserve the host's actual URL request handler.
 @interface RCTNetworking (ElvenHandlerSelection)
 - (id<RCTURLRequestHandler>)handlerForRequest:(NSURLRequest *)request;
+- (dispatch_queue_t)requestQueue;
 @end
 
 @interface ElvenStatusRequest : NSObject <RCTURLRequestDelegate>
@@ -71,7 +72,7 @@
                 timeout:(double)timeout resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
 {
   RCTNetworking *networking = [registry moduleForName:"Networking"];
-  dispatch_queue_t queue = [networking requestQueue];
+  dispatch_queue_t queue = [networking respondsToSelector:@selector(requestQueue)] ? [networking requestQueue] : networking.methodQueue;
   if (!queue || ![networking respondsToSelector:@selector(handlerForRequest:)] ||
       endpoint.length > 16384 || headersJson.length > 65536 || body.length > 4194304 ||
       !isfinite(timeout) || timeout < 1 || timeout > 30000 || requestId.length > 128) {
