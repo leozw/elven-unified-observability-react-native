@@ -50,10 +50,13 @@ async function probeNativeHttp(): Promise<string> {
   };
   await ElvenObservability.initialize(configuration);
   ElvenObservability.logs.error('native bounded response probe');
+  // Exercise the public sanitizer on Hermes, not only Jest/Node.
+  ElvenObservability.logs.error('a.'.repeat(32_750));
   const result = await ElvenObservability.flush(3000);
   const deliveredHealth = ElvenObservability.health();
   const deliveryStats = (await (await fetch(`${endpoint}/stats`)).json()) as {
     payloadSeen: Record<string, boolean>;
+    oversizeSeen: Record<string, boolean>;
     cancelled: Record<string, boolean>;
   };
   // Background flush can win the race. Require actual collector payload + SDK ACK,
@@ -63,6 +66,7 @@ async function probeNativeHttp(): Promise<string> {
     result.pending !== 0 ||
     deliveredHealth.droppedItems !== 0 ||
     !deliveryStats.payloadSeen['/bounded/v1/logs'] ||
+    !deliveryStats.oversizeSeen['/bounded/v1/logs'] ||
     !deliveryStats.cancelled['/bounded/v1/logs']
   )
     throw new Error(

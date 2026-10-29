@@ -11,6 +11,7 @@ const state = {
   proof: null,
   hooks: {},
   payloadSeen: {},
+  oversizeSeen: {},
 };
 const server = http.createServer((request, response) => {
   const path = new URL(request.url, 'http://127.0.0.1').pathname;
@@ -47,6 +48,14 @@ const server = http.createServer((request, response) => {
               (scope.logRecords ?? []).some(
                 (record) =>
                   record.body?.stringValue === 'native bounded response probe'
+              )
+            )
+        );
+        state.oversizeSeen[path] ||= (payload.resourceLogs ?? []).some(
+          (resource) =>
+            (resource.scopeLogs ?? []).some((scope) =>
+              (scope.logRecords ?? []).some(
+                (record) => record.body?.stringValue === '[OVERSIZE]'
               )
             )
         );
