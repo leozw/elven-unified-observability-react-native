@@ -2,7 +2,18 @@
 
 Production-oriented logs, metrics, traces, errors, network telemetry, app lifecycle, and mobile performance through one correlated OpenTelemetry pipeline.
 
-The SDK targets modern React Native with Hermes and the New Architecture, with an isolated Legacy/New Architecture compatibility lane for React Native 0.79.x. It exports standard OTLP/HTTP JSON to a Collector, keeps backend credentials out of the mobile app, bounds every queue and payload, and fails open when observability is unavailable.
+The SDK targets modern React Native with Hermes and the New Architecture, with an isolated Legacy/New Architecture compatibility lane for React Native 0.79.x. It exports standard OTLP/HTTP JSON to a Collector with bounded export queues and best-effort delivery. Applications must keep backend credentials out of the mobile app.
+
+Authoritative integration documentation: [docs.elven.works](https://docs.elven.works). Documentation source and corrections: [elvenworks-ps/docs.elven.works](https://github.com/elvenworks-ps/docs.elven.works). This README describes the package contract, not acceptance of a particular device or customer backend.
+
+### Operational limits
+
+- Initialize one SDK instance after the application's required consent decision. Repeated initialization of that instance is idempotent; independently created instances do not coordinate ownership of global instrumentation or native storage.
+- `collector.headers` is a static, copied map. There is no automatic token renewal or 401 refresh. Use only scoped, short-lived ingest credentials, never backend/admin secrets. A controlled shutdown and reinitialization is required to replace headers; account for persisted telemetry from the previous session.
+- HTTP 401 and other permanent failures discard the affected batch. HTTP 408/425/429/5xx and network errors use bounded attempts, jitter and a circuit breaker. Retry-After is capped by `retry.maxDelayMillis`; explicit flush/background flush can bypass retry scheduling. This is not lossless offline delivery or a guarantee to honor longer server backoff.
+- `queue.enabled: false` disables native persistence, not collection or the bounded in-memory queue. Signal disable prevents restored batches of that signal from being sent. `context.clear()` clears identity context, not already queued telemetry. Shutdown attempts a final export and preserves retryable durable data; it is not a consent-revocation purge API.
+- Output limits do not make arbitrarily large input objects or strings free to sanitize. Avoid high-cardinality event names, arbitrary bodies, huge objects and sensitive data in free-form text. Redaction is defense in depth, not a universal PII detector. Network body capture is not implemented.
+- Export timeouts do not bound the entire SDK/native shutdown sequence. Native bridge/storage stalls, physical-device performance, MetricKit delivery and app-store privacy declarations require separate qualification. Node/Jest tests and mocked native APIs are not iOS, Android or Hermes runtime proof.
 
 ## What it captures
 

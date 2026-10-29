@@ -30,7 +30,7 @@ React Native 0.79 is unsupported upstream as of August 2026. Elven compatibility
 | Xcode in bare React Native          | 16.1+ as inherited from React Native 0.87              |
 | Xcode with Expo SDK 57              | 26.4+ per Expo SDK 57                                  |
 | Kotlin                              | Host line (2.1.20/2.2.0 tested); fallback is 2.0.21    |
-| OpenTelemetry JS                    | API 1.9.1, stable SDK 2.10.0, logs/transformer 0.221.0 |
+| OpenTelemetry JS                    | API 1.9.1, stable SDK 2.12.0, logs/transformer 0.223.0 |
 
 ## Capability matrix
 

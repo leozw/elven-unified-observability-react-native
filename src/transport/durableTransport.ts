@@ -40,6 +40,8 @@ export class DurableTransport {
   private flushPromise: Promise<TransportFlushResult> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private accepting = true;
+  private pendingItems = 0;
+  private pendingBytes = 0;
   private readonly ready: Promise<void>;
 
   constructor(
@@ -72,6 +74,15 @@ export class DurableTransport {
       );
       return false;
     }
+    if (
+      this.pendingItems >= this.config.queue.maxItems ||
+      this.pendingBytes + byteLength > this.config.queue.maxBytes
+    ) {
+      this.droppedItems += 1;
+      return false;
+    }
+    this.pendingItems += 1;
+    this.pendingBytes += byteLength;
 
     const now = this.now();
     const item: QueueItem = {
@@ -86,6 +97,7 @@ export class DurableTransport {
     };
 
     const accepted = await this.withMutation(async () => {
+      if (!this.accepting) return false;
       this.purgeExpired(now);
       this.items.push(item);
       this.queueBytes += item.byteLength;
@@ -93,6 +105,9 @@ export class DurableTransport {
       const retained = this.items.some((candidate) => candidate.id === item.id);
       await this.persist();
       return retained;
+    }).finally(() => {
+      this.pendingItems -= 1;
+      this.pendingBytes -= byteLength;
     });
 
     if (accepted) {
@@ -311,6 +326,7 @@ export class DurableTransport {
         const item = validateQueueItem(candidate);
         if (
           item &&
+          this.config.signals[item.signal] &&
           now - item.enqueuedAtUnixMillis <= this.config.queue.maxAgeMillis &&
           item.byteLength <= this.config.queue.maxItemBytes
         ) {
@@ -319,6 +335,7 @@ export class DurableTransport {
         }
       }
       this.enforceLimits();
+      await this.persist();
       this.scheduleNextAttempt();
     } catch (error) {
       this.items = [];
@@ -460,6 +477,12 @@ function validateQueueItem(value: unknown): QueueItem | undefined {
   ) {
     return undefined;
   }
+  if (
+    !Number.isFinite(value.enqueuedAtUnixMillis) ||
+    !Number.isFinite(value.attempts) ||
+    !Number.isFinite(value.nextAttemptUnixMillis)
+  )
+    return undefined;
   const actualByteLength = utf8ByteLength(value.payload);
   return {
     id: value.id,

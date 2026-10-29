@@ -545,10 +545,10 @@ class TracingDispatcher implements TracingApi {
     return this.runtime()?.providers.tracer.currentTraceContext();
   }
   restore<T>(traceContext: TraceContext, operation: () => T): T {
-    return (
-      this.runtime()?.providers.tracer.restore(traceContext, operation) ??
-      operation()
-    );
+    const runtime = this.runtime();
+    return runtime
+      ? runtime.providers.tracer.restore(traceContext, operation)
+      : operation();
   }
 }
 
@@ -559,9 +559,10 @@ class ContextDispatcher implements TelemetryContextApi {
     return this.runtime()?.providers.context.capture();
   }
   run<T>(target: Context | TraceContext | undefined, operation: () => T): T {
-    return (
-      this.runtime()?.providers.context.run(target, operation) ?? operation()
-    );
+    const runtime = this.runtime();
+    return runtime
+      ? runtime.providers.context.run(target, operation)
+      : operation();
   }
   bind<T>(target: Context | TraceContext | undefined, value: T): T {
     return this.runtime()?.providers.context.bind(target, value) ?? value;

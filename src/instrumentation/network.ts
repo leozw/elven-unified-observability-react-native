@@ -38,6 +38,7 @@ let fetchInvocationDepth = 0;
 export class NetworkInstrumentation {
   private restoreFetch: (() => void) | undefined;
   private restoreXhr: (() => void) | undefined;
+  private readonly pendingXhr = new Set<() => void>();
 
   constructor(
     private readonly config: ResolvedConfig,
@@ -51,6 +52,7 @@ export class NetworkInstrumentation {
   ) {}
 
   start(): void {
+    if (this.restoreFetch || this.restoreXhr) return;
     const network = this.config.instrumentations.network;
     if (!network.enabled) return;
     if (network.fetch) this.patchFetch();
@@ -62,6 +64,8 @@ export class NetworkInstrumentation {
     this.restoreXhr?.();
     this.restoreFetch = undefined;
     this.restoreXhr = undefined;
+    for (const cleanup of this.pendingXhr) cleanup();
+    this.pendingXhr.clear();
   }
 
   private patchFetch(): void {
@@ -74,20 +78,42 @@ export class NetworkInstrumentation {
       return;
     }
     const wrapped: FetchFunction = async (input, init) => {
-      const url = requestUrl(input);
-      if (!url || this.shouldIgnore(url)) {
+      let url = '';
+      let method = 'GET';
+      let span: ElvenSpan | undefined;
+      let nextInit = init;
+      let startedAt = 0;
+      try {
+        url = requestUrl(input);
+        if (url && !this.shouldIgnore(url)) {
+          method = requestMethod(input, init);
+          span = this.startRequestSpan(method, url, init?.headers);
+          nextInit = this.withPropagation(input, init, span);
+          startedAt = monotonicNow();
+        }
+      } catch {
+        this.safely(() => span?.end());
         return original(input, init);
       }
-      const method = requestMethod(input, init);
-      const span = this.startRequestSpan(method, url, init?.headers);
-      const nextInit = this.withPropagation(input, init, span);
-      const startedAt = monotonicNow();
+      if (!span) return original(input, init);
+      const requestSpan = span;
       let request: Promise<Response>;
+      let invoked = false;
       fetchInvocationDepth += 1;
       try {
-        request = span.run(() => original(input, nextInit));
+        request = requestSpan.run(() => {
+          invoked = true;
+          return original(input, nextInit);
+        });
       } catch (error) {
-        this.finishFailure(span, method, url, startedAt, error);
+        if (!invoked) {
+          this.safely(() => requestSpan.end());
+          return original(input, init);
+        }
+        this.safely(() =>
+          this.finishFailure(requestSpan, method, url, startedAt, error)
+        );
+        this.safely(() => requestSpan.end());
         throw error;
       } finally {
         fetchInvocationDepth = Math.max(0, fetchInvocationDepth - 1);
@@ -95,18 +121,24 @@ export class NetworkInstrumentation {
 
       try {
         const response = await request;
-        this.finishResponse(
-          span,
-          method,
-          url,
-          startedAt,
-          response.status,
-          response.headers
+        this.safely(() =>
+          this.finishResponse(
+            requestSpan,
+            method,
+            url,
+            startedAt,
+            response.status,
+            response.headers
+          )
         );
         return response;
       } catch (error) {
-        this.finishFailure(span, method, url, startedAt, error);
+        this.safely(() =>
+          this.finishFailure(requestSpan, method, url, startedAt, error)
+        );
         throw error;
+      } finally {
+        this.safely(() => requestSpan.end());
       }
     };
     target.fetch = wrapped;
@@ -159,6 +191,8 @@ export class NetworkInstrumentation {
       headers?: HeadersLike
     ): void =>
       this.finishResponse(span, method, url, startedAt, status, headers);
+    const safely = (operation: () => void): void => this.safely(operation);
+    const pending = this.pendingXhr;
 
     function wrappedOpen(
       this: XMLHttpRequest,
@@ -191,12 +225,16 @@ export class NetworkInstrumentation {
         return;
       }
 
-      const span = startRequestSpan(
-        state.method,
-        state.url,
-        state.requestHeaders
-      );
-      injectXhrHeaders(this, state, span);
+      let span: ElvenSpan | undefined;
+      try {
+        span = startRequestSpan(state.method, state.url, state.requestHeaders);
+        injectXhrHeaders(this, state, span);
+      } catch {
+        safely(() => span?.end());
+        Reflect.apply(originalSend, this, [body]);
+        return;
+      }
+      const requestSpan = span;
       const startedAt = monotonicNow();
       let finished = false;
       let failure: unknown;
@@ -214,33 +252,50 @@ export class NetworkInstrumentation {
         finish();
       };
       const onLoadEnd = (): void => finish();
-      const finish = (): void => {
-        if (finished) return;
+      const cleanup = (): void => {
         finished = true;
+        pending.delete(cleanup);
         this.removeEventListener('error', onError);
         this.removeEventListener('timeout', onTimeout);
         this.removeEventListener('abort', onAbort);
         this.removeEventListener('loadend', onLoadEnd);
-        if (failure) {
-          finishFailure(span, state.method, state.url, startedAt, failure);
-          return;
+        safely(() => requestSpan.end());
+      };
+      const finish = (): void => {
+        if (finished) return;
+        try {
+          safely(() => {
+            if (failure) {
+              finishFailure(
+                requestSpan,
+                state.method,
+                state.url,
+                startedAt,
+                failure
+              );
+              return;
+            }
+            finishResponse(
+              requestSpan,
+              state.method,
+              state.url,
+              startedAt,
+              safeXhrStatus(this),
+              xhrResponseHeaders(this)
+            );
+          });
+        } finally {
+          cleanup();
         }
-        finishResponse(
-          span,
-          state.method,
-          state.url,
-          startedAt,
-          safeXhrStatus(this),
-          xhrResponseHeaders(this)
-        );
       };
 
+      pending.add(cleanup);
       this.addEventListener('error', onError);
       this.addEventListener('timeout', onTimeout);
       this.addEventListener('abort', onAbort);
       this.addEventListener('loadend', onLoadEnd);
       try {
-        span.run(() => Reflect.apply(originalSend, this, [body]));
+        requestSpan.run(() => Reflect.apply(originalSend, this, [body]));
       } catch (error) {
         failure = error;
         finish();
@@ -306,7 +361,6 @@ export class NetworkInstrumentation {
       span.setStatus({ code: SpanStatusCode.OK });
     }
     this.recordNetworkMetrics(method, url, status, durationSeconds, span);
-    span.end();
   }
 
   private finishFailure(
@@ -332,7 +386,6 @@ export class NetworkInstrumentation {
       },
       { context: span.context, error, eventName: 'network.request.failed' }
     );
-    span.end();
   }
 
   private recordNetworkMetrics(
@@ -426,6 +479,14 @@ export class NetworkInstrumentation {
 
   private shouldIgnore(url: string): boolean {
     return matchesUrl(url, this.config.instrumentations.network.ignoreUrls);
+  }
+
+  private safely(operation: () => void): void {
+    try {
+      operation();
+    } catch {
+      // Telemetry cannot replace a response or an application network error.
+    }
   }
 }
 

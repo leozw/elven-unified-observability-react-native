@@ -96,7 +96,10 @@ export class Sanitizer {
   }
 
   url(value: string): string {
-    const fallback = this.removeQueryAndFragment(value);
+    const fallback = this.truncate(
+      redactTextContent(this.removeQueryAndFragment(value)),
+      this.privacy.maxAttributeValueLength
+    );
     const UrlConstructor = (globalThis as { URL?: UrlConstructorLike }).URL;
     if (!UrlConstructor) return fallback;
     try {
@@ -110,7 +113,7 @@ export class Sanitizer {
         const allowed = new Set(
           this.privacy.allowedUrlQueryKeys.map((key) => key.toLowerCase())
         );
-        for (const [key] of parsed.searchParams.entries()) {
+        for (const [key] of Array.from(parsed.searchParams.entries())) {
           if (!allowed.has(key.toLowerCase())) parsed.searchParams.delete(key);
         }
       }
