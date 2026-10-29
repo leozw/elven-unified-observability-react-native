@@ -7,6 +7,7 @@ jest.mock('../NativeElvenUnifiedObservabilityReactNative', () => ({
     writePersistedQueue: jest.fn(),
     clearPersistedQueue: jest.fn(),
     shutdown: jest.fn(),
+    closeSession: jest.fn(),
     setCurrentTraceContext: jest.fn(),
     setDiagnosticsEnabled: jest.fn(),
   },
@@ -25,6 +26,7 @@ const mockNativeModule = NativeModule as unknown as {
   writePersistedQueue: jest.Mock;
   clearPersistedQueue: jest.Mock;
   shutdown: jest.Mock;
+  closeSession: jest.Mock;
   setCurrentTraceContext: jest.Mock;
   setDiagnosticsEnabled: jest.Mock;
 };
@@ -42,8 +44,9 @@ function createBridge(messages: string[] = []): NativeBridge {
 describe('NativeBridge', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    mockNativeModule.initialize.mockResolvedValue(
+    mockNativeModule.initialize.mockImplementation(async (input: string) =>
       JSON.stringify({
+        sessionId: (JSON.parse(input) as { sessionId: string }).sessionId,
         platform: 'android',
         osVersion: '16',
         deviceModel: 'sdk_gphone64',
@@ -59,6 +62,7 @@ describe('NativeBridge', () => {
     mockNativeModule.writePersistedQueue.mockResolvedValue(true);
     mockNativeModule.clearPersistedQueue.mockResolvedValue(true);
     mockNativeModule.shutdown.mockResolvedValue(true);
+    mockNativeModule.closeSession.mockResolvedValue(true);
   });
 
   it('initializes only native-safe settings and parses platform context', async () => {
@@ -195,6 +199,7 @@ describe('NativeBridge', () => {
     mockNativeModule.writePersistedQueue.mockRejectedValue(new Error('write'));
     mockNativeModule.clearPersistedQueue.mockRejectedValue(new Error('clear'));
     mockNativeModule.shutdown.mockRejectedValue(new Error('shutdown'));
+    mockNativeModule.closeSession.mockRejectedValue(new Error('shutdown'));
     mockNativeModule.setCurrentTraceContext.mockImplementation(() => {
       throw new Error('context');
     });
@@ -212,7 +217,7 @@ describe('NativeBridge', () => {
     await expect(bridge.shutdown()).resolves.toBe(false);
     expect(() => bridge.setCurrentTraceContext(undefined)).not.toThrow();
     expect(() => bridge.setDiagnosticsEnabled(true)).not.toThrow();
-    expect(messages.length).toBeGreaterThanOrEqual(6);
+    expect(messages.length).toBeGreaterThanOrEqual(5);
   });
 });
 

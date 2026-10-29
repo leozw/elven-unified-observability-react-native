@@ -6,8 +6,12 @@ import type {
   TraceContext,
 } from '../types';
 import type { Diagnostics } from '../core/diagnostics';
+import { createEventId } from '../core/ids';
+import { queueProvenance } from '../core/provenance';
 
 interface NativeInitializationConfig {
+  sessionId: string;
+  queueProvenance: string;
   diagnosticsEnabled: boolean;
   maxEventQueueSize: number;
   captureLifecycle: boolean;
@@ -17,15 +21,35 @@ interface NativeInitializationConfig {
 }
 
 export class NativeBridge {
+  readonly sessionId = createEventId();
+  private closed = false;
+  private purgeRequested = false;
+  private closing: Promise<boolean> | undefined;
+  private closingWithPurge = false;
+  private rejected = false;
+  private readonly pending = new Set<Promise<unknown>>();
   constructor(private readonly diagnostics: Diagnostics) {}
 
   get available(): boolean {
-    return NativeModule !== null;
+    return (
+      NativeModule != null &&
+      typeof NativeModule.closeSession === 'function' &&
+      !this.closed &&
+      !this.rejected
+    );
   }
 
   async initialize(config: ResolvedConfig): Promise<NativePlatformContext> {
-    if (!NativeModule) return { platform: 'unknown' };
+    if (!this.available || !NativeModule) {
+      if (NativeModule)
+        this.diagnostics.warn(
+          'Native lifecycle fencing is unavailable; rebuild the app. Native telemetry and persistence are disabled.'
+        );
+      return { platform: 'unknown' };
+    }
     const nativeConfig: NativeInitializationConfig = {
+      sessionId: this.sessionId,
+      queueProvenance: queueProvenance(config),
       diagnosticsEnabled: config.diagnostics.enabled,
       maxEventQueueSize: Math.min(config.queue.maxItems, 256),
       captureLifecycle:
@@ -45,7 +69,24 @@ export class NativeBridge {
     };
 
     try {
-      const value = await NativeModule.initialize(JSON.stringify(nativeConfig));
+      const value = await this.track(
+        NativeModule.initialize(JSON.stringify(nativeConfig))
+      );
+      if (this.closed) {
+        // A late initialize acknowledgement cannot resurrect its native generation.
+        await NativeModule.closeSession(this.sessionId, this.purgeRequested);
+        return { platform: 'unknown' };
+      }
+      if (
+        (JSON.parse(value) as { sessionId?: string }).sessionId !==
+        this.sessionId
+      ) {
+        this.rejected = true;
+        this.diagnostics.warn(
+          'Native telemetry ownership was not acknowledged; native capture and storage are disabled.'
+        );
+        return { platform: 'unknown' };
+      }
       return parsePlatformContext(value);
     } catch (error) {
       this.diagnostics.warn('Native observability initialization failed.', {
@@ -56,10 +97,12 @@ export class NativeBridge {
   }
 
   async drainEvents(): Promise<ReadonlyArray<NativeTelemetryEvent>> {
-    if (!NativeModule) return [];
+    if (!this.available || !NativeModule) return [];
     try {
-      const values = await NativeModule.drainEvents();
+      const values = await this.track(NativeModule.drainEvents());
+      if (this.closed) return [];
       return values
+        .slice(0, 256)
         .map(parseNativeEvent)
         .filter((event): event is NativeTelemetryEvent => event !== undefined);
     } catch (error) {
@@ -71,9 +114,10 @@ export class NativeBridge {
   }
 
   async readPersistedQueue(): Promise<string | undefined> {
-    if (!NativeModule) return undefined;
+    if (!this.available || !NativeModule) return undefined;
     try {
-      const value = await NativeModule.readPersistedQueue();
+      const value = await this.track(NativeModule.readPersistedQueue());
+      if (this.closed) return undefined;
       return value || undefined;
     } catch (error) {
       this.diagnostics.debug('Could not read the durable telemetry queue.', {
@@ -84,9 +128,10 @@ export class NativeBridge {
   }
 
   async writePersistedQueue(value: string): Promise<boolean> {
-    if (!NativeModule) return false;
+    if (!this.available || !NativeModule) return false;
     try {
-      return await NativeModule.writePersistedQueue(value);
+      const written = await this.track(NativeModule.writePersistedQueue(value));
+      return !this.closed && written;
     } catch (error) {
       this.diagnostics.debug('Could not persist the durable telemetry queue.', {
         error: toErrorMessage(error),
@@ -96,9 +141,9 @@ export class NativeBridge {
   }
 
   async clearPersistedQueue(): Promise<boolean> {
-    if (!NativeModule) return false;
+    if (!this.available || !NativeModule) return false;
     try {
-      return await NativeModule.clearPersistedQueue();
+      return await this.track(NativeModule.clearPersistedQueue());
     } catch (error) {
       this.diagnostics.debug('Could not clear the durable telemetry queue.', {
         error: toErrorMessage(error),
@@ -107,20 +152,47 @@ export class NativeBridge {
     }
   }
 
-  async shutdown(): Promise<boolean> {
-    if (!NativeModule) return false;
-    try {
-      return await NativeModule.shutdown();
-    } catch (error) {
-      this.diagnostics.debug('Native observability shutdown failed.', {
-        error: toErrorMessage(error),
+  shutdown(): Promise<boolean> {
+    return this.close(false);
+  }
+
+  close(purge: boolean): Promise<boolean> {
+    this.closed = true;
+    this.purgeRequested ||= purge;
+    if (!NativeModule) return Promise.resolve(true);
+    if (typeof NativeModule.closeSession !== 'function')
+      return Promise.resolve(false);
+    if (!this.closing || (purge && !this.closingWithPurge)) {
+      this.closingWithPurge ||= purge;
+      const module = NativeModule;
+      const outstanding = [...this.pending];
+      // Invalidate natively now, but do not release ownership while RPC delivery is outstanding.
+      const request = Promise.resolve().then(() =>
+        module.closeSession(this.sessionId, this.purgeRequested)
+      );
+      this.closing = (async () => {
+        const acknowledged = await request;
+        await Promise.allSettled(outstanding);
+        return acknowledged;
+      })().catch((error: unknown) => {
+        this.diagnostics.warn('Native close/purge was not acknowledged.', {
+          error: toErrorMessage(error),
+        });
+        return false;
       });
-      return false;
     }
+    return this.closing;
+  }
+
+  private track<T>(operation: Promise<T>): Promise<T> {
+    this.pending.add(operation);
+    return operation.finally(() => {
+      this.pending.delete(operation);
+    });
   }
 
   setCurrentTraceContext(value: TraceContext | undefined): void {
-    if (!NativeModule) return;
+    if (!this.available || !NativeModule) return;
     try {
       NativeModule.setCurrentTraceContext(
         value?.traceId ?? '',
@@ -132,7 +204,7 @@ export class NativeBridge {
   }
 
   setDiagnosticsEnabled(enabled: boolean): void {
-    if (!NativeModule) return;
+    if (!this.available || !NativeModule) return;
     try {
       NativeModule.setDiagnosticsEnabled(enabled);
     } catch {
@@ -143,6 +215,7 @@ export class NativeBridge {
 
 function parsePlatformContext(value: string): NativePlatformContext {
   try {
+    if (value.length > 16_384) return { platform: 'unknown' };
     const parsed = JSON.parse(value) as Record<string, unknown>;
     const platform =
       parsed.platform === 'android' || parsed.platform === 'ios'
@@ -165,6 +238,7 @@ function parsePlatformContext(value: string): NativePlatformContext {
 
 function parseNativeEvent(value: string): NativeTelemetryEvent | undefined {
   try {
+    if (value.length > 131_072) return undefined;
     const parsed = JSON.parse(value) as Record<string, unknown>;
     if (
       typeof parsed.id !== 'string' ||

@@ -7,6 +7,8 @@ import type { NativeBridge } from '../native/bridge';
 import type { NativeTelemetryEvent, TraceContext } from '../types';
 
 export class NativeEventProcessor {
+  private closed = false;
+  private draining: Promise<void> | undefined;
   private readonly seen = new Set<string>();
 
   constructor(
@@ -17,9 +19,22 @@ export class NativeEventProcessor {
     private readonly diagnostics: Diagnostics
   ) {}
 
-  async drain(): Promise<void> {
+  close(): void {
+    this.closed = true;
+    this.seen.clear();
+  }
+
+  drain(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    return (this.draining ??= this.runDrain().finally(() => {
+      this.draining = undefined;
+    }));
+  }
+
+  private async runDrain(): Promise<void> {
     if (!this.bridge.available) return;
     const events = await this.bridge.drainEvents();
+    if (this.closed) return;
     for (const event of events) {
       if (this.seen.has(event.id)) continue;
       this.seen.add(event.id);

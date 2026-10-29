@@ -1,0 +1,36 @@
+diff --git a/v3/types.cjs b/v3/types.cjs
+index 11ed4dfc4745f9af1f1501874576b78b77d294ef..2595b5d95f67017d0af47c0c540bfe323ffa6f8e 100644
+--- a/v3/types.cjs
++++ b/v3/types.cjs
+@@ -1777,6 +1777,13 @@ class ZodArray extends ZodType {
+             });
+             return parseUtil_js_1.INVALID;
+         }
++        // Local resource guard for CVE-2023-54404; do not allocate per-element parse results first.
++        const remaining = ctx.common.elvenArrayBudget ?? 4096;
++        if (ctx.data.length > remaining) {
++            (0, parseUtil_js_1.addIssueToContext)(ctx, { code: ZodError_js_1.ZodIssueCode.too_big, maximum: remaining, type: "array", inclusive: true, exact: false, message: "Collection validation budget exceeded." });
++            return parseUtil_js_1.INVALID;
++        }
++        ctx.common.elvenArrayBudget = remaining - ctx.data.length;
+         if (def.exactLength !== null) {
+             const tooBig = ctx.data.length > def.exactLength.value;
+             const tooSmall = ctx.data.length < def.exactLength.value;
+diff --git a/v3/types.js b/v3/types.js
+index 40b11c0f01b2af54e0ed48e198607bd8836d9a63..ec2320d9533467c76fdcd461cf451f469815e3a3 100644
+--- a/v3/types.js
++++ b/v3/types.js
+@@ -1756,6 +1756,13 @@ export class ZodArray extends ZodType {
+             });
+             return INVALID;
+         }
++        // Local resource guard for CVE-2023-54404; do not allocate per-element parse results first.
++        const remaining = ctx.common.elvenArrayBudget ?? 4096;
++        if (ctx.data.length > remaining) {
++            addIssueToContext(ctx, { code: ZodIssueCode.too_big, maximum: remaining, type: "array", inclusive: true, exact: false, message: "Collection validation budget exceeded." });
++            return INVALID;
++        }
++        ctx.common.elvenArrayBudget = remaining - ctx.data.length;
+         if (def.exactLength !== null) {
+             const tooBig = ctx.data.length > def.exactLength.value;
+             const tooSmall = ctx.data.length < def.exactLength.value;

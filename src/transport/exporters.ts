@@ -24,6 +24,10 @@ abstract class TransportExporter {
 
   constructor(protected readonly transport: DurableTransport) {}
 
+  close(): void {
+    this.closed = true;
+  }
+
   async forceFlush(): Promise<void> {
     await this.transport.flush(true);
   }

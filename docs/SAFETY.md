@@ -1,0 +1,55 @@
+# Lifecycle And Storage Contract
+
+The authoritative integration documentation is [docs.elven.works](https://docs.elven.works), with source at [elvenworks-ps/docs.elven.works](https://github.com/elvenworks-ps/docs.elven.works). This document describes the additive package APIs and security tradeoffs, not customer acceptance.
+
+## Consent And Identity
+
+`consent: 'granted'` is the compatibility default. Applications must supply their own persisted consent decision on each process launch. Runtime denial is shared by all copies/instances of this SDK. A second instance cannot silently patch globals or bypass a runtime denial. An explicit grant is required after denial.
+
+```ts
+await sdk.initialize({
+  serviceName: 'mobile',
+  collector: { endpoint: 'https://ingest.example.test' },
+  consent: 'denied',
+});
+// After the host application's consent decision:
+await sdk.setConsent(true);
+await sdk.setIdentity({
+  user: { id: 'opaque-user-id' },
+  tenant: { id: 'opaque-tenant-id' },
+});
+const result = await sdk.setConsent(false, 2000);
+if (result.purged !== true) {
+  // Keep consent denied. Erasure was not acknowledged within this budget.
+}
+```
+
+Revocation and identity/destination changes synchronously close collection and transport before awaiting storage. They do not flush old data. Batches already handed to the platform network stack are aborted when possible, but transmitted bytes cannot be recalled. Immutable JS strings/platform buffers are not guaranteed cryptographically zeroized. `purged` refers to acknowledged SDK queue/file removal, not backend deletion.
+
+`setIdentity` and `reconfigure` are awaitable transitions. Existing void context identity setters initiate the same transition and remain callable; events during the transition are intentionally dropped. This privacy-related data loss is preferable to sending previous-user batches under new credentials. `context.clear()` now uses a no-send identity transition. Reconfigure headers for token renewal; there is no automatic 401 refresh.
+
+## One Deadline And Owner
+
+The default lifecycle budget is 5000ms, capped at 30000ms, configurable through `lifecycleTimeoutMillis`. An explicit flush/shutdown timeout uses one budget across provider, native and storage phases, not a fresh timeout per phase. JS event-loop/OS scheduling delays and application callbacks cannot be preempted by a timer.
+
+Deadline expiry closes export, aborts current requests and removes automatic collection. Native `closeSession` invalidates the generation before completing file work. Late reads, initializes, writes and fetch completions are fenced. Actual native cleanup remains tracked; another owner cannot start while it is unresolved. This intentionally fails closed for telemetry while application work continues. `health().disabledReason` and diagnostics distinguish another owner from a consent denial.
+
+Native binaries without the fenced lifecycle API are not used for persistence or native capture. Rebuild the application; an OTA-only JS update cannot add the native method. The new API is additive, but neither old/new binary interoperability nor an untested RN line is implied.
+
+## Durable Data
+
+Queues use schema 2, an opaque SHA-256 provenance of service/environment, exact signal destinations, sorted header values and user/tenant IDs, plus the current native owner generation. Raw credentials and IDs are not added to the queue envelope. Hashes are pseudonymous fingerprints, not anonymization or authorization.
+
+Schema 1, malformed, expired, oversized, disabled-signal or mismatched-provenance data is dropped. There is no unsafe migration/relabeling of existing telemetry. Provide initial identity configuration to restore a queue for a known identity. Normal shutdown attempts a final export and can preserve retryable data only for matching provenance. Revocation/purge removes it without sending. A failed/expired purge must remain unacknowledged; caller-side consent must stay denied.
+
+Sanitization bounds traversal/output, skips accessors/toJSON and rejects oversized strings before scanning them. Oversized/unsupported input is replaced or dropped. Built-in masks remain active even with custom masks. Custom filters/regexes/Proxy traps are trusted application extensions and can execute arbitrary application code; no universal CPU or zero-overhead guarantee is made.
+
+## Development Supply Chain
+
+Compatible patch/minor re-resolution updates xmldom, brace-expansion, compression, js-yaml, shell-quote, source-map-js, undici and compatible zod 4 consumers. Babel remains major 7. No forced zod 3-to-4 override is used.
+
+Expo CLI 57.0.17 still depends on node-forge 1.4.0: [GHSA-86w9-cpqp-85rv / CVE-2026-85393](https://github.com/advisories/GHSA-86w9-cpqp-85rv). The registry advisory has no patched version at audit time. The local Expo CLI patch rejects `getCertificateForSigningIdAsync` before invoking node-forge. Device signing through this workspace's Expo helper is intentionally disabled; unsigned Xcode simulator release builds remain allowed. This mitigates that entry point, not the whole package or a proven exploit of the release workflow. Release CI uses `CODE_SIGNING_ALLOWED=NO`; no signing identity is imported. Do not remove the guard until a reviewed upstream fix/replacement is qualified.
+
+Expo's zod 3.25.76 has a local guard limiting array validation to 4096 total elements per parse, before allocating per-element validation results, in both CJS/ESM v3 entry points. This mitigates [GHSA-mrhx-c7xc-m3w5 / CVE-2023-54404](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) for the actual Expo v3 imports; it is not a claim that upstream 3.25.76 is fixed. The registry lists 4.6.6 as patched. Oversized legitimate CLI input can now be rejected. The audit remains enabled and reports both unresolved upstream version advisories; no ignore/exception or fabricated version is used.
+
+The `.yarn/patches` mitigations are development-workspace patches, not additions to the public mobile production graph. Tests exercise their actual resolved import paths. Parent security/release review remains required.

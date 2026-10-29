@@ -55,6 +55,14 @@ RCT_EXPORT_MODULE()
   [ElvenNativeRuntime setCurrentTraceId:traceId spanId:spanId];
 }
 
+- (void)closeSession:(NSString *)sessionId
+               purge:(BOOL)purge
+             resolve:(RCTPromiseResolveBlock)resolve
+              reject:(RCTPromiseRejectBlock)reject
+{
+  [ElvenNativeRuntime closeSession:sessionId purge:purge completion:^(BOOL closed) { resolve(@(closed)); }];
+}
+
 - (void)setDiagnosticsEnabled:(BOOL)enabled
 {
   [ElvenNativeRuntime setDiagnosticsEnabled:enabled];

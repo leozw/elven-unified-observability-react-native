@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
                  completion:(void (^)(BOOL written))completion;
 + (void)clearPersistedQueue:(void (^)(BOOL cleared))completion;
 + (BOOL)shutdown;
++ (void)closeSession:(NSString *)sessionId purge:(BOOL)purge completion:(void (^)(BOOL))completion;
 + (void)setCurrentTraceId:(NSString *)traceId spanId:(NSString *)spanId;
 + (void)setDiagnosticsEnabled:(BOOL)enabled;
 + (nullable NSString *)currentTraceId;

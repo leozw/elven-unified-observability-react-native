@@ -17,6 +17,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ios-native-lifecycle:
+    name: iOS simulator lifecycle and storage fence
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: sudo xcode-select --switch /Applications/Xcode_26.4.app/Contents/Developer
+      - uses: ./.github/actions/setup
+      - name: Exercise real native close, purge, restart and stale owner fencing
+        run: bash scripts/verify-ios-lifecycle.sh
+
   quality:
     name: Quality, tests, budgets, and package
     runs-on: ubuntu-latest
@@ -28,6 +41,9 @@ jobs:
 
       - name: Setup
         uses: ./.github/actions/setup
+
+      - name: Verify local security mitigations without suppressing the audit
+        run: node .yarn/releases/yarn-4.11.0.cjs security:mitigations
 
       - name: Run complete validation
         run: node .yarn/releases/yarn-4.11.0.cjs validate

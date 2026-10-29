@@ -55,6 +55,7 @@
     "test:coverage": "jest --runInBand --coverage",
     "native:codegen": "node node_modules/react-native/scripts/generate-codegen-artifacts.js -p . -t all -s library -o artifacts/codegen",
     "security:audit": "yarn npm audit --all --recursive --severity high",
+    "security:mitigations": "node scripts/security-mitigations.mjs",
     "benchmark": "node --expose-gc scripts/benchmark.mjs",
     "size": "node scripts/check-bundle-size.mjs",
     "package:lint": "publint --pack npm --strict && attw --pack --profile esm-only .",
@@ -93,7 +94,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "@babel/core": "7.29.0",
+    "@babel/core": "7.29.7",
     "@eslint/compat": "^2.1.0",
     "@eslint/eslintrc": "^3.3.5",
     "@eslint/js": "9.39.5",
@@ -136,7 +137,9 @@
   ],
   "resolutions": {
     "eslint-plugin-ft-flow@npm:^2.0.1": "npm:3.0.11",
-    "image-size@npm:^1.0.2": "npm:image-size-next@1.2.2"
+    "image-size@npm:^1.0.2": "npm:image-size-next@1.2.2",
+    "zod@npm:^3.25.76": "patch:zod@npm%3A3.25.76#~/.yarn/patches/zod-npm-3.25.76-7de26333f8.patch",
+    "@expo/cli@npm:^57.0.17": "patch:@expo/cli@npm%3A57.0.17#~/.yarn/patches/@expo-cli-npm-57.0.17-0c147fbbd7.patch"
   },
   "packageManager": "yarn@4.11.0",
   "react-native-builder-bob": {

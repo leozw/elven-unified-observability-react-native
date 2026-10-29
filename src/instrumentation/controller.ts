@@ -91,13 +91,21 @@ export class AutomaticInstrumentationController {
     }
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): void {
     if (this.nativePollTimer) clearInterval(this.nativePollTimer);
     this.nativePollTimer = undefined;
-    this.consoleInstrumentation.shutdown();
-    this.lifecycleInstrumentation.shutdown();
-    this.errorInstrumentation.shutdown();
-    this.networkInstrumentation.shutdown();
-    if (this.nativeEventsEnabled) await this.nativeEvents.drain();
+    for (const close of [
+      () => this.consoleInstrumentation.shutdown(),
+      () => this.lifecycleInstrumentation.shutdown(),
+      () => this.errorInstrumentation.shutdown(),
+      () => this.networkInstrumentation.shutdown(),
+    ]) {
+      try {
+        close();
+      } catch {
+        /* Keep closing the remaining collectors. */
+      }
+    }
+    this.nativeEvents.close();
   }
 }

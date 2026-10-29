@@ -33,6 +33,10 @@ class ElvenUnifiedObservabilityReactNativeModule(
     promise.resolve(ElvenNativeRuntime.shutdown())
   }
 
+  override fun closeSession(sessionId: String, purge: Boolean, promise: Promise) {
+    ElvenNativeRuntime.closeSession(sessionId, purge) { closed -> promise.resolve(closed) }
+  }
+
   override fun setCurrentTraceContext(traceId: String, spanId: String) {
     ElvenNativeRuntime.setCurrentTraceContext(traceId, spanId)
   }

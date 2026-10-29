@@ -9,13 +9,32 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
-
-    ElvenObservability.initialize({
+    const configuration = {
       serviceName: 'elven-bare-validation',
       environment: 'validation',
-      collector: { endpoint: 'https://collector.example.com' },
-    })
-      .then(() => {
+      lifecycleTimeoutMillis: 3000,
+      collector: { endpoint: 'http://127.0.0.1:1', timeoutMillis: 500 },
+      signals: { logs: true, metrics: false, traces: false },
+      instrumentations: { console: false, network: false, errors: false },
+    };
+
+    ElvenObservability.initialize(configuration)
+      .then(async () => {
+        if (!mounted) return;
+        if (!ElvenObservability.health().nativeBridgeAvailable)
+          throw new Error('Native fence is unavailable');
+        ElvenObservability.logs.error('native storage lifecycle probe');
+        await ElvenObservability.flush(2000);
+        if (!mounted) return;
+        const revoked = await ElvenObservability.setConsent(false, 3000);
+        if (!revoked.purged) throw new Error('Native purge not acknowledged');
+        if (!mounted) return;
+        await ElvenObservability.setConsent(true, 3000);
+        if (!mounted) return;
+        await ElvenObservability.setIdentity(
+          { user: { id: 'runtime-probe' }, tenant: { id: 'runtime-probe' } },
+          3000
+        );
         if (!mounted) return;
         const nativeBridgeAvailable =
           ElvenObservability.health().nativeBridgeAvailable;
@@ -31,7 +50,7 @@ export default function App() {
 
     return () => {
       mounted = false;
-      ElvenObservability.shutdown().catch(() => undefined);
+      ElvenObservability.setConsent(false, 3000).catch(() => undefined);
     };
   }, []);
 

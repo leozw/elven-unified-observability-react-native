@@ -48,6 +48,7 @@ export interface TelemetryProviders {
   tracer: ElvenTracer;
   logger: StructuredLogger;
   metrics: MetricRecorder;
+  close(): void;
   forceFlush(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -134,6 +135,8 @@ export function createTelemetryProviders(
   });
 
   const dynamicContext = new DynamicTelemetryContext(config, sanitizer);
+  if (config.identity.user) dynamicContext.setUser(config.identity.user);
+  if (config.identity.tenant) dynamicContext.setTenant(config.identity.tenant);
   const tracer = new ElvenTracer(
     tracerProvider.getTracer(SDK_NAME, SDK_VERSION),
     dynamicContext,
@@ -162,6 +165,14 @@ export function createTelemetryProviders(
     tracer,
     logger,
     metrics,
+    close(): void {
+      traceExporter.close();
+      logExporter.close();
+      metricExporter.close();
+      dynamicContext.clear();
+      dynamicContext.shutdown();
+      exemplars.clear();
+    },
     async forceFlush(): Promise<void> {
       const results = await Promise.allSettled([
         tracerProvider.forceFlush(),

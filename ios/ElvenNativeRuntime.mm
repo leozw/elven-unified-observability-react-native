@@ -54,6 +54,9 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 @property(atomic, assign) BOOL captureMetricKitDiagnostics;
 @property(atomic, assign) BOOL captureMetricKitMetrics;
 @property(atomic, assign) BOOL initialized;
+@property(atomic, copy, nullable) NSString *sessionId;
+@property(atomic, strong) NSDate *sessionStartedAt;
+@property(nonatomic, strong) NSMutableOrderedSet<NSString *> *closedSessions;
 @property(atomic, assign) NSUInteger maxEventQueueSize;
 @property(atomic, assign) NSUInteger generation;
 @property(nonatomic, assign) NSTimeInterval processStartUnixMillis;
@@ -100,6 +103,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   self = [super init];
   if (self) {
     _events = [NSMutableArray array];
+    _closedSessions = [NSMutableOrderedSet orderedSet];
     _notificationTokens = [NSMutableArray array];
     _ioQueue = dispatch_queue_create("works.elven.observability.io", DISPATCH_QUEUE_SERIAL);
     _maxEventQueueSize = 128;
@@ -138,6 +142,34 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 + (BOOL)shutdown
 {
   return [[self shared] shutdownInternal];
+}
+
++ (void)closeSession:(NSString *)sessionId purge:(BOOL)purge completion:(void (^)(BOOL))completion
+{
+  ElvenNativeRuntime *runtime = [self shared];
+  @synchronized(runtime) {
+    [runtime.closedSessions addObject:sessionId];
+    while (runtime.closedSessions.count > 64) [runtime.closedSessions removeObjectAtIndex:0];
+    if (runtime.sessionId != nil && ![runtime.sessionId isEqualToString:sessionId]) {
+      completion(NO);
+      return;
+    }
+    [runtime shutdownInternal];
+    runtime.sessionId = nil;
+    @synchronized(runtime.events) { [runtime.events removeAllObjects]; }
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+   @synchronized(runtime.events) { [runtime.events removeAllObjects]; }
+   dispatch_async(runtime.ioQueue, ^{
+    @synchronized(runtime) {
+      if (runtime.sessionId != nil) { completion(NO); return; }
+      NSURL *url = [runtime queueFileUrl];
+      BOOL cleared = !purge || ![[NSFileManager defaultManager] fileExistsAtPath:url.path] ||
+          [[NSFileManager defaultManager] removeItemAtURL:url error:nil];
+      completion(cleared);
+    }
+   });
+  });
 }
 
 + (void)setCurrentTraceId:(NSString *)traceId spanId:(NSString *)spanId
@@ -194,8 +226,17 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 
 - (NSString *)initializeWithConfiguration:(NSString *)configurationJson
 {
-  [self shutdownInternal];
+ @synchronized(self) {
   NSDictionary *configuration = [self dictionaryFromJson:configurationJson];
+  NSString *sessionId = configuration[@"sessionId"];
+  @synchronized(self) {
+    if (![sessionId isKindOfClass:[NSString class]] || sessionId.length > 128 ||
+        [self.closedSessions containsObject:sessionId] ||
+        (self.sessionId != nil && ![self.sessionId isEqualToString:sessionId])) return @"{}";
+    [self shutdownInternal];
+    self.sessionId = sessionId;
+    self.sessionStartedAt = [NSDate date];
+  }
   self.diagnosticsEnabled = [configuration[@"diagnosticsEnabled"] boolValue];
   self.maxEventQueueSize = MIN(
       256,
@@ -239,6 +280,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
                                                    options:0
                                                      error:nil];
   return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"{}";
+ }
 }
 
 - (NSArray<NSString *> *)drainEventsInternal
@@ -252,8 +294,14 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 
 - (void)readPersistedQueue:(void (^)(NSString *))completion
 {
+  NSString *sessionId = self.sessionId;
   dispatch_async(self.ioQueue, ^{
+    if (!self.initialized || ![self.sessionId isEqualToString:sessionId]) { completion(@""); return; }
     NSURL *fileUrl = [self queueFileUrl];
+    NSDictionary *fileInfo = [[NSFileManager defaultManager] attributesOfItemAtPath:fileUrl.path error:nil];
+    if ([fileInfo[NSFileSize] unsignedLongLongValue] > ELVMaxPersistedQueueBytes) {
+      [[NSFileManager defaultManager] removeItemAtURL:fileUrl error:nil]; completion(@""); return;
+    }
     NSData *data = [NSData dataWithContentsOfURL:fileUrl
                                          options:NSDataReadingMappedIfSafe
                                            error:nil];
@@ -270,7 +318,10 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 - (void)writePersistedQueue:(NSString *)value
                  completion:(void (^)(BOOL))completion
 {
+  if (value.length > ELVMaxPersistedQueueBytes) { completion(NO); return; }
+  NSString *sessionId = [self dictionaryFromJson:value][@"ownerGeneration"];
   dispatch_async(self.ioQueue, ^{
+    if (!self.initialized || ![self.sessionId isEqualToString:sessionId]) { completion(NO); return; }
     NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
     if (data.length == 0 || data.length > ELVMaxPersistedQueueBytes) {
       completion(NO);
@@ -291,7 +342,9 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 
 - (void)clearPersistedQueue:(void (^)(BOOL))completion
 {
+  NSString *sessionId = self.sessionId;
   dispatch_async(self.ioQueue, ^{
+    if (!self.initialized || ![self.sessionId isEqualToString:sessionId]) { completion(NO); return; }
     NSURL *fileUrl = [self queueFileUrl];
     if (![[NSFileManager defaultManager] fileExistsAtPath:fileUrl.path]) {
       completion(YES);
@@ -560,44 +613,34 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 #if ELVEN_HAS_METRICKIT
 - (void)didReceiveMetricPayloads:(NSArray<MXMetricPayload *> *)payloads
 {
-  if (!self.captureMetricKitMetrics) return;
-  for (MXMetricPayload *payload in payloads) {
-    [self recordMetricKitData:[payload JSONRepresentation]
-                         type:@"performance"
-                         name:@"ios.metrickit.metrics"];
+ @synchronized(self) {
+  if (!self.initialized || !self.captureMetricKitMetrics) return;
+  for (NSUInteger i = 0; i < MIN(payloads.count, 16); i++) {
+    MXMetricPayload *payload = payloads[i];
+    if ([payload.timeStampBegin compare:self.sessionStartedAt] == NSOrderedAscending) continue;
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionary];
+    if (payload.cpuMetrics) attributes[@"metrickit.cpu.seconds"] = @(payload.cpuMetrics.cumulativeCPUTime.doubleValue);
+    if (payload.memoryMetrics) attributes[@"metrickit.memory.peak"] = @(payload.memoryMetrics.peakMemory.doubleValue);
+    [self recordEventWithType:@"performance" name:@"ios.metrickit.metrics" durationMillis:nil attributes:attributes timestampUnixMillis:nil];
   }
+ }
 }
 
 - (void)didReceiveDiagnosticPayloads:(NSArray<MXDiagnosticPayload *> *)payloads
 {
-  if (!self.captureMetricKitDiagnostics) return;
-  for (MXDiagnosticPayload *payload in payloads) {
-    [self recordMetricKitData:[payload JSONRepresentation]
-                         type:@"error"
-                         name:@"ios.metrickit.diagnostics"];
+ @synchronized(self) {
+  if (!self.initialized || !self.captureMetricKitDiagnostics) return;
+  for (NSUInteger i = 0; i < MIN(payloads.count, 16); i++) {
+    MXDiagnosticPayload *payload = payloads[i];
+    if ([payload.timeStampBegin compare:self.sessionStartedAt] == NSOrderedAscending) continue;
+    [self recordEventWithType:@"error" name:@"ios.metrickit.diagnostics" durationMillis:nil attributes:@{
+      @"metrickit.crash.count": @(payload.crashDiagnostics.count),
+      @"metrickit.hang.count": @(payload.hangDiagnostics.count)
+    } timestampUnixMillis:nil];
   }
+ }
 }
 #endif
-
-- (void)recordMetricKitData:(NSData *)data
-                       type:(NSString *)type
-                       name:(NSString *)name
-{
-  NSMutableDictionary *attributes = [@{
-    @"metrickit.payload.bytes": @(data.length)
-  } mutableCopy];
-  if (data.length <= 32 * 1024) {
-    id payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (payload != nil) attributes[@"metrickit.payload"] = payload;
-  } else {
-    attributes[@"metrickit.payload.truncated"] = @YES;
-  }
-  [self recordEventWithType:type
-                       name:name
-             durationMillis:nil
-                 attributes:attributes
-        timestampUnixMillis:nil];
-}
 
 - (void)recordEventWithType:(NSString *)rawType
                        name:(NSString *)name
@@ -693,15 +736,15 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
     return [self truncate:[self redactText:value] length:limit];
   }
   if (depth >= 4) {
-    return [self truncate:[self redactText:[value description]]
-                   length:ELVMaxAttributeLength];
+    return @"[TRUNCATED]";
   }
   if ([value isKindOfClass:[NSDictionary class]]) {
     NSDictionary *dictionary = (NSDictionary *)value;
     NSMutableDictionary *output = [NSMutableDictionary dictionary];
     for (id rawKey in dictionary) {
       if (*budget <= 0 || output.count >= 32) break;
-      NSString *childKey = [self truncate:[rawKey description] length:128];
+      if (![rawKey isKindOfClass:[NSString class]] || [rawKey length] > 128) continue;
+      NSString *childKey = rawKey;
       id child = [self sanitizeValue:dictionary[rawKey]
                                 key:childKey
                               depth:depth + 1
@@ -724,14 +767,14 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
   if ([value isKindOfClass:[NSDate class]]) {
     return @([(NSDate *)value timeIntervalSince1970] * 1000.0);
   }
-  return [self truncate:[self redactText:[value description]]
-                 length:ELVMaxAttributeLength];
+  return @"[Unsupported]";
 }
 
 - (NSDictionary *)platformContext
 {
   NSBundle *bundle = [NSBundle mainBundle];
   return @{
+    @"sessionId": self.sessionId ?: @"",
     @"platform": @"ios",
     @"osVersion": [UIDevice currentDevice].systemVersion ?: @"unknown",
     @"deviceModel": [self machineIdentifier],
@@ -810,6 +853,7 @@ __attribute__((constructor)) static void ELVCaptureNativeImageLoadTime(void)
 
 - (NSString *)redactText:(NSString *)value
 {
+  if (value.length > 65536) return @"[OVERSIZE]";
   static NSArray<NSRegularExpression *> *expressions;
   static NSArray<NSString *> *replacements;
   static dispatch_once_t onceToken;
