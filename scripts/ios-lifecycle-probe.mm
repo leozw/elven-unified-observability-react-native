@@ -21,21 +21,21 @@ static void Open(NSString *session) {
 static BOOL Write(NSString *session) {
   __block BOOL done = NO, accepted = NO;
   [ElvenNativeRuntime writePersistedQueue:[NSString stringWithFormat:@"{\"ownerGeneration\":\"%@\",\"schemaVersion\":2,\"provenance\":\"probe\",\"items\":[]}", session]
-                              completion:^(BOOL result) { accepted = result; done = YES; }];
+                              completion:^(BOOL result) { dispatch_async(dispatch_get_main_queue(), ^{ accepted = result; done = YES; }); }];
   Pump(^BOOL { return done; });
   return accepted;
 }
 
 static NSString *Read(void) {
   __block NSString *value = nil;
-  [ElvenNativeRuntime readPersistedQueue:^(NSString *result) { value = result; }];
+  [ElvenNativeRuntime readPersistedQueue:^(NSString *result) { dispatch_async(dispatch_get_main_queue(), ^{ value = result; }); }];
   Pump(^BOOL { return value != nil; });
   return value;
 }
 
 static BOOL Close(NSString *session) {
   __block BOOL done = NO, purged = NO;
-  [ElvenNativeRuntime closeSession:session purge:YES completion:^(BOOL result) { purged = result; done = YES; }];
+  [ElvenNativeRuntime closeSession:session purge:YES completion:^(BOOL result) { dispatch_async(dispatch_get_main_queue(), ^{ purged = result; done = YES; }); }];
   Pump(^BOOL { return done; });
   return purged;
 }

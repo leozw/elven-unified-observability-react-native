@@ -42,7 +42,7 @@ try {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(packages),
-      signal: AbortSignal.timeout(15000),
+    signal: globalThis.AbortSignal.timeout(15000),
     }
   );
   if (!response.ok)
