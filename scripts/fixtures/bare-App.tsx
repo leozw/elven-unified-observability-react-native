@@ -21,6 +21,11 @@ export default function App() {
     ElvenObservability.initialize(configuration)
       .then(async () => {
         if (!mounted) return;
+        if (
+          !(globalThis as unknown as { HermesInternal?: unknown })
+            .HermesInternal
+        )
+          throw new Error('Hermes runtime unavailable');
         if (!ElvenObservability.health().nativeBridgeAvailable)
           throw new Error('Native fence is unavailable');
         ElvenObservability.logs.error('native storage lifecycle probe');

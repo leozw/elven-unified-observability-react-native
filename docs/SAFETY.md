@@ -46,6 +46,8 @@ Android next-launch crashes also carry the provenance hash. Old crash formats an
 
 Sanitization bounds traversal/output, skips accessors/toJSON and rejects oversized strings before scanning them. Oversized/unsupported input is replaced or dropped. Built-in masks remain active even with custom masks. Custom filters/regexes/Proxy traps are trusted application extensions and can execute arbitrary application code; no universal CPU or zero-overhead guarantee is made.
 
+Exception stacks are collected only when represented as bounded data properties. Opaque/accessor stacks are omitted rather than executing a potentially user-defined formatter/getter; names/messages remain available. This is an intentional diagnostic-detail tradeoff, not proof that every runtime exposes identical stacks.
+
 ## Development Supply Chain
 
 Compatible patch/minor re-resolution updates xmldom, brace-expansion, compression, js-yaml, shell-quote, source-map-js, undici and compatible zod 4 consumers. Babel remains major 7. No forced zod 3-to-4 override is used.
