@@ -56,6 +56,7 @@ interface Runtime {
   transport: DurableTransport;
   automatic: AutomaticInstrumentationController;
   eventNames: Set<string>;
+  navigation: Set<ReactNavigationInstrumentation>;
 }
 
 export class ElvenObservabilitySdk {
@@ -285,10 +286,14 @@ export class ElvenObservabilitySdk {
     options: NavigationInstrumentationOptions = {}
   ): NavigationInstrumentation {
     let delegate: ReactNavigationInstrumentation | undefined;
+    let delegateRuntime: Runtime | undefined;
+    let stopped = false;
     const ensure = (): ReactNavigationInstrumentation | undefined => {
-      if (delegate) return delegate;
       const runtime = this.runtime;
-      if (!runtime) return undefined;
+      if (!runtime || stopped) return undefined;
+      if (delegateRuntime === runtime) return delegate;
+      delegate?.shutdown();
+      if (runtime.navigation.size >= 16) return undefined;
       delegate = new ReactNavigationInstrumentation(
         navigationRef,
         options,
@@ -297,12 +302,32 @@ export class ElvenObservabilitySdk {
         runtime.providers.metrics,
         runtime.providers.context
       );
+      runtime.navigation.add(delegate);
+      delegateRuntime = runtime;
       return delegate;
     };
     return {
-      onReady: () => ensure()?.onReady(),
-      onStateChange: () => ensure()?.onStateChange(),
-      shutdown: () => delegate?.shutdown(),
+      onReady: () => {
+        try {
+          ensure()?.onReady();
+        } catch {
+          /* Navigation telemetry fails open. */
+        }
+      },
+      onStateChange: () => {
+        try {
+          ensure()?.onStateChange();
+        } catch {
+          /* Navigation telemetry fails open. */
+        }
+      },
+      shutdown: () => {
+        stopped = true;
+        if (delegate) delegateRuntime?.navigation.delete(delegate);
+        delegate?.shutdown();
+        delegate = undefined;
+        delegateRuntime = undefined;
+      },
     };
   }
 
@@ -484,6 +509,16 @@ export class ElvenObservabilitySdk {
     runtime?.transport.stop(purge);
     runtime?.automatic.shutdown();
     runtime?.providers.close();
+    if (runtime) {
+      for (const navigation of runtime.navigation) {
+        try {
+          navigation.shutdown();
+        } catch {
+          /* Continue closing. */
+        }
+      }
+      runtime.navigation.clear();
+    }
     if (this.closingResources && this.closingResources.bridge === bridge) {
       this.closingResources.purge ||= purge;
       if (purge) bridge?.close(true);
@@ -596,6 +631,7 @@ export class ElvenObservabilitySdk {
       transport,
       automatic,
       eventNames: new Set(),
+      navigation: new Set(),
     };
     automatic.start();
     this.state = 'started';

@@ -42,6 +42,8 @@ Queues use schema 2, an opaque SHA-256 provenance of service/environment, exact 
 
 Schema 1, malformed, expired, oversized, disabled-signal or mismatched-provenance data is dropped. There is no unsafe migration/relabeling of existing telemetry. Provide initial identity configuration to restore a queue for a known identity. Normal shutdown attempts a final export and can preserve retryable data only for matching provenance. Revocation/purge removes it without sending. A failed/expired purge must remain unacknowledged; caller-side consent must stay denied.
 
+Android next-launch crashes also carry the provenance hash. Old crash formats and a previous identity's crashes are discarded; an already-running old crash handler cannot recreate its file after an acknowledged purge. MetricKit history beginning before the current native consent session is dropped. Only fixed numeric summaries/counts from up to 16 payloads are collected, not raw JSON diagnostic payloads. Historical/crash detail coverage is therefore intentionally reduced; real MetricKit delivery remains a physical-device acceptance gate.
+
 Sanitization bounds traversal/output, skips accessors/toJSON and rejects oversized strings before scanning them. Oversized/unsupported input is replaced or dropped. Built-in masks remain active even with custom masks. Custom filters/regexes/Proxy traps are trusted application extensions and can execute arbitrary application code; no universal CPU or zero-overhead guarantee is made.
 
 ## Development Supply Chain
