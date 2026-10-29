@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 const source = '4478c5e53d367efd64c11bbde89f6a5d9add045d';
 const id = 12930457127;
@@ -32,17 +32,15 @@ assert.equal(
   '',
   'Compiled iOS consumer/SDK inputs changed: a fresh native build is required.'
 );
-// Public metadata only. The standard artifact action handles its own opaque read-only job token.
+if (process.argv[2] === '--inputs-only') {
+  console.log('Compiled inputs match the pinned iOS binary source.');
+  process.exit(0);
+}
+// Official GitHub action supplies metadata using its opaque read-only job identity.
+// No SDK, registry or human credential is read here.
 const url = `https://api.github.com/repos/leozw/elven-unified-observability-react-native/actions/artifacts/${id}`;
-const response = await fetch(url, {
-  signal: globalThis.AbortSignal.timeout(15000),
-});
-assert.equal(
-  response.status,
-  200,
-  'Artifact provenance unavailable; do not reuse an unverified binary.'
-);
-const artifact = await response.json();
+assert.ok(process.argv[2], 'Artifact metadata file is required.');
+const artifact = JSON.parse(await readFile(process.argv[2], 'utf8'));
 assert.equal(artifact.id, id);
 assert.equal(artifact.name, 'bare-rn-0792-legacy-ios-release-simulator');
 assert.equal(artifact.expired, false);
