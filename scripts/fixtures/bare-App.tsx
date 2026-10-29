@@ -48,6 +48,10 @@ export default function App() {
         if (!mounted) return;
         const nativeBridgeAvailable =
           ElvenObservability.health().nativeBridgeAvailable;
+        const finalPurge = await ElvenObservability.setConsent(false, 3000);
+        if (!finalPurge.purged)
+          throw new Error('Final native purge not acknowledged');
+        if (!mounted) return;
         setRuntimeStatus(
           nativeBridgeAvailable
             ? 'Elven native bridge ready'
