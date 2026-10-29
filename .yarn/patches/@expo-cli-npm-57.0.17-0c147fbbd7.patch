@@ -8,9 +8,9 @@ index b6a0247275857b0cc1f5234040558709a8570294..860946978669102f78837fae5c006af2
  async function getCertificateForSigningIdAsync(id) {
 -    const pem = await getSecurityPemAsync(id);
 -    return _nodeforge().default.pki.certificateFromPem(pem);
-+    // SDK audit: node-forge has no published fix for GHSA-86w9-cpqp-85rv.
++    // SDK audit: keep device signing closed pending independent signing review.
 +    // This workspace validates unsigned simulator builds only; signing fails closed.
-+    throw new _errors.CommandError('ELVEN_SIGNING_DISABLED', 'Expo certificate/signing resolution is disabled pending a reviewed node-forge fix. Use the unsigned simulator build, not this device-signing path.');
++    throw new _errors.CommandError('ELVEN_SIGNING_DISABLED', 'Expo certificate/signing resolution is disabled pending an independent signing review. Use the unsigned simulator build, not this device-signing path.');
  }
  async function findIdentitiesAsync() {
      var _stdout_trim, _stdout;

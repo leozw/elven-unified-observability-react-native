@@ -1994,7 +1994,7 @@ __metadata:
 
 "@expo/cli@patch:@expo/cli@npm%3A57.0.17#~/.yarn/patches/@expo-cli-npm-57.0.17-0c147fbbd7.patch":
   version: 57.0.17
-  resolution: "@expo/cli@patch:@expo/cli@npm%3A57.0.17#~/.yarn/patches/@expo-cli-npm-57.0.17-0c147fbbd7.patch::version=57.0.17&hash=08fbd5"
+  resolution: "@expo/cli@patch:@expo/cli@npm%3A57.0.17#~/.yarn/patches/@expo-cli-npm-57.0.17-0c147fbbd7.patch::version=57.0.17&hash=48029c"
   dependencies:
     "@expo/code-signing-certificates": "npm:^0.0.6"
     "@expo/config": "npm:~57.0.8"
@@ -2066,7 +2066,7 @@ __metadata:
       optional: true
   bin:
     expo-internal: main.js
-  checksum: 10c0/af8b50cb81a2c70e54de334f94a560c3039f81c67302a9abe5085f29843bb7788742c70dfef87826c3b829ad2c2b150dd8297f95b648563915319834c04eba96
+  checksum: 10c0/ae330a9d0798b369311fa579668f5396115f596388e1e986dcba7a383c886e01ecafe4ca3b20d1cadbef3463ea7b36953d92b64b3bdf51b63441374c07bbf18c
   languageName: node
   linkType: hard
 
@@ -9349,9 +9349,9 @@ __metadata:
   linkType: hard
 
 "node-forge@npm:^1.3.3":
-  version: 1.4.0
-  resolution: "node-forge@npm:1.4.0"
-  checksum: 10c0/67330a5f1f95257a4c8a93b7d555abe87b5f15e350123aa396c97a21a8ca94f9c6549008eb2c73668a91e0d7e3a905785acbd8f8bd0751c29401292011f8f8e1
+  version: 1.4.2
+  resolution: "node-forge@npm:1.4.2"
+  checksum: 10c0/fb80d5eac8018f413647e17e6278876d0bfff8b32e8e51c4132584ddcef6b1881cc647a278072af3c2611744397e7844fc0f87f940ed818ec423f4d0c48db10a
   languageName: node
   linkType: hard
 

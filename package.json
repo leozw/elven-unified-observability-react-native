@@ -54,7 +54,7 @@
     "test": "jest --runInBand",
     "test:coverage": "jest --runInBand --coverage",
     "native:codegen": "node node_modules/react-native/scripts/generate-codegen-artifacts.js -p . -t all -s library -o artifacts/codegen",
-    "security:audit": "yarn npm audit --all --recursive --severity high",
+    "security:audit": "node scripts/security-audit.mjs",
     "security:mitigations": "node scripts/security-mitigations.mjs",
     "benchmark": "node --expose-gc scripts/benchmark.mjs",
     "size": "node scripts/check-bundle-size.mjs",
