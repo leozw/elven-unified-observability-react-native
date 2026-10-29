@@ -2,7 +2,22 @@
 
 Production-oriented logs, metrics, traces, errors, network telemetry, app lifecycle, and mobile performance through one correlated OpenTelemetry pipeline.
 
-The SDK targets modern React Native with Hermes and the New Architecture, with an isolated Legacy/New Architecture compatibility lane for React Native 0.79.x. It exports standard OTLP/HTTP JSON to a Collector, keeps backend credentials out of the mobile app, bounds every queue and payload, and fails open when observability is unavailable.
+The SDK targets modern React Native with Hermes and the New Architecture, with an isolated Legacy/New Architecture compatibility lane for React Native 0.79.x. It exports standard OTLP/HTTP JSON to a Collector with bounded export queues and best-effort delivery. Applications must keep backend credentials out of the mobile app.
+
+Authoritative integration documentation: [docs.elven.works](https://docs.elven.works). Documentation source and corrections: [elvenworks-ps/docs.elven.works](https://github.com/elvenworks-ps/docs.elven.works). This README describes the package contract, not acceptance of a particular device or customer backend.
+
+### Operational limits
+
+- Initialize after the application's consent decision. `consent` defaults to `granted` for compatibility; pass `denied` until consent exists. One process-wide owner is enforced across SDK instances/copies. Other instances become no-ops with diagnostics and `health().disabledReason`; ownership stays quarantined while real native cleanup is unresolved.
+- `collector.headers` is a static, copied map. There is no automatic 401 refresh. Use scoped ingest credentials, never backend/admin secrets. `await sdk.reconfigure(configuration)` purges/fences the old generation before replacing a destination or headers. A changed collector/header/identity fingerprint cannot restore the previous queue.
+- HTTP 401 and other permanent failures discard the affected batch. HTTP 408/425/429/5xx and network errors use bounded attempts, jitter and a circuit breaker. `Retry-After` is a server minimum, including during explicit/background flush and shutdown. Batches that cannot outlive the minimum within queue retention are dropped, not sent early. `retry.maxDelayMillis` caps client backoff only. This is not lossless offline delivery.
+- `await sdk.setConsent(false, timeoutMillis)` immediately stops collection, closes/aborts export without a final flush, and purges memory/native queues. Check `result.purged === true`; timeout or failed native acknowledgement is not proof of erasure. Already transmitted bytes cannot be recalled. Denial is process-wide; the application must supply its persisted consent choice on every launch. `setConsent(true)` explicitly grants again.
+- `await sdk.setIdentity({user, tenant})` performs no-send purge and reinitialization. Legacy `context.setUser`, `setTenant` and `clear` remain callable but initiate that asynchronous transition; telemetry during it is dropped. Await `setIdentity` when subsequent telemetry must be recorded. Prefer initial `identity` configuration when restoring durable data for a known user/tenant.
+- `initialize`, `flush` and `shutdown` use one lifecycle budget (`lifecycleTimeoutMillis`, default 5000ms, capped at 30000ms), including native/storage/provider waits. Timeout closes the generation; late results cannot restart export. `shutdown(timeout, {flush:false,purge:true})` is also available. Normal shutdown remains best-effort final export/persistence; `queue.enabled:false` only disables persistence.
+- Schema-v1 durable data is deliberately dropped. Schema-v2 queues carry only a hashed provenance, native generation fence and up to three retry-floor timestamps; mismatched destination, headers, user or tenant are dropped, not migrated. An updated native binary is required for fenced persistence and bounded mobile HTTP. An older/missing native HTTP adapter defers export with diagnostics, rather than silently using native fetch's full-body buffering. Web keeps its JS fetch adapter.
+- Mobile exports use owned status-only native requests, cancelled at headers without decoding/accumulating collector response bodies. The RN client's TLS/proxy/security hooks are preserved; application globals and unrelated calls are not patched/cancelled. This requires version-qualified RN internal access and the supplied Android consumer rules. A host interceptor/custom URL handler that buffers responses can still allocate them; this is not a universal platform-memory guarantee. See [native HTTP constraints](docs/SAFETY.md#native-http).
+- Sanitization inspects at most 256 nodes, depth 4 and 32 array entries; strings over 65536 characters or containing a non-whitespace token over 1024 characters are replaced before regex/encoding, and the traversal has a 262144-character budget. Whole-field replacement avoids leaking partial quoted credentials but can omit legitimate long URLs/identifiers or diagnostic detail. Getters/toJSON are not executed, and built-in privacy masks cannot be removed by a custom mask list. Engine property enumeration can still scale with caller object width; custom filters/regexes and host Proxy traps are not preemptible work. Redaction is defense in depth, not universal PII detection or a constant-CPU guarantee. Body capture is not implemented.
+- Native bridge/storage failures, physical-device performance, MetricKit and app-store privacy declarations require separate qualification. Node/Jest mocks, native simulator probes and release compilation are distinct evidence, not physical device proof. See [lifecycle and security contract](docs/SAFETY.md).
 
 ## What it captures
 
@@ -92,7 +107,7 @@ For local HTTP Collector testing, Android emulators can use `10.0.2.2` or `adb r
 
 ## iOS
 
-Autolinking and CocoaPods install the Objective-C++ Native Module. React Native 0.79.x is validated with both Legacy registration and the generated TurboModule path:
+Autolinking and CocoaPods install the Objective-C++ Native Module. The same native selectors are exported additively through Legacy registration and the generated TurboModule path. The audit candidate corrects missing Legacy exports found by a real 0.79.2 simulator probe; this requires a new native binary, not an OTA-only update. Fresh Legacy and Turbo build/runtime qualification is a release gate:
 
 ```sh
 npx pod-install
@@ -123,7 +138,7 @@ Installing or upgrading this SDK changes native code. Create a new binary and us
 
 ### Expo Go
 
-Expo Go cannot contain arbitrary third-party native modules. The SDK does not crash: JS logs, metrics, traces, fetch/XHR, JS errors, and AppState continue to work, while native crashes, ANR/hang, frames, device metadata, and durable native storage are unavailable. `health().nativeBridgeAvailable` reports `false`.
+Expo Go cannot contain arbitrary third-party native modules. JS instrumentation can continue to record in the bounded in-memory queue, but native crashes, ANR/hang, frames, device metadata, and durable native storage are unavailable. `health().nativeBridgeAvailable` reports `false`. The audit candidate also defers mobile export when the bounded native HTTP adapter is missing; Expo Go is therefore not an export-qualified replacement for a rebuilt Development Build. Web export remains available. This deliberate migration tradeoff avoids falling back to native fetch's full collector-response buffering.
 
 ## Automatic instrumentation
 

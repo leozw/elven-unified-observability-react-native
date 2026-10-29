@@ -23,6 +23,7 @@ const SEVERITY: Record<LogLevel, SeverityNumber> = {
 };
 
 export class StructuredLogger {
+  private emitting = false;
   constructor(
     private readonly logger: OtelLogger,
     private readonly contextManager: DynamicTelemetryContext,
@@ -79,12 +80,14 @@ export class StructuredLogger {
   ): void {
     const sampleRatio = this.config.sampling.logRatio[level];
     if (
+      this.emitting ||
       !this.config.signals.logs ||
       sampleRatio <= 0 ||
       (sampleRatio < 1 && this.random() >= sampleRatio)
     ) {
       return;
     }
+    this.emitting = true;
     try {
       const otelContext = toOtelContext(
         options?.context,
@@ -117,6 +120,8 @@ export class StructuredLogger {
       });
     } catch {
       // Application logging cannot be coupled to telemetry health.
+    } finally {
+      this.emitting = false;
     }
   }
 

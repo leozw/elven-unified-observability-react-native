@@ -1,7 +1,10 @@
 import { ROOT_CONTEXT, trace } from '@opentelemetry/api';
 import { resolveConfig, validateConfiguration } from '../core/config';
 import { DynamicTelemetryContext } from '../core/dynamicContext';
+import { queueProvenance } from '../core/provenance';
+import type { ResolvedConfig } from '../types';
 import { Sanitizer } from '../core/sanitizer';
+import { redactTextContent } from '../core/redaction';
 import {
   matchesUrl,
   monotonicNow,
@@ -13,6 +16,21 @@ import {
 } from '../__fixtures__/testConfig';
 
 describe('configuration', () => {
+  it('accepts the old ResolvedConfig shape without new optional fields', () => {
+    const config = resolvedConfiguration();
+    const legacy: Omit<ResolvedConfig, 'identity' | 'lifecycleTimeoutMillis'> =
+      Object.fromEntries(
+        Object.entries(config).filter(
+          ([key]) => key !== 'identity' && key !== 'lifecycleTimeoutMillis'
+        )
+      ) as Omit<ResolvedConfig, 'identity' | 'lifecycleTimeoutMillis'>;
+    const accepted: ResolvedConfig = legacy;
+    expect(accepted.identity).toBeUndefined();
+    expect(accepted.lifecycleTimeoutMillis).toBeUndefined();
+    expect(queueProvenance(accepted)).toBe(
+      queueProvenance({ ...config, identity: {} })
+    );
+  });
   it('resolves safe production defaults and exact OTLP signal paths', () => {
     const config = resolveConfig(
       baseConfiguration({
@@ -113,6 +131,41 @@ describe('privacy sanitizer', () => {
     },
   });
   const sanitizer = new Sanitizer(config.privacy);
+
+  it('rejects ambiguous long tokens before URL/email regex searches', () => {
+    for (const suffix of [
+      '',
+      '@example.test',
+      ' @x.y',
+      '://@example.test',
+      ': //user:pass@x.y',
+      '://user:pass@x.y',
+    ]) {
+      const value = 'a.'.repeat(32_750) + suffix;
+      expect(redactTextContent(value)).toBe('[OVERSIZE]');
+      expect(sanitizer.message(value)).toBe('[OVERSIZE]');
+      expect(sanitizer.url(value)).toBe('[OVERSIZE]');
+    }
+    expect(redactTextContent('a://'.repeat(16_000) + 'user:pass@x.y')).toBe(
+      '[OVERSIZE]'
+    );
+    expect(
+      redactTextContent('a: //'.repeat(10_000) + 'user:pass@x.y')
+    ).not.toContain('user:pass@');
+  });
+
+  it('drops whole fields instead of leaving quoted credential fragments', () => {
+    const value = `before password="${'x'.repeat(1_025)} remaining-secret" after`;
+    expect(redactTextContent(value)).toBe('[OVERSIZE]');
+    expect(redactTextContent('x'.repeat(1_024))).toBe('x'.repeat(1_024));
+    expect(redactTextContent('x'.repeat(1_025))).toBe('[OVERSIZE]');
+    expect(redactTextContent('ok '.repeat(22_000))).toBe('[OVERSIZE]');
+    expect(
+      redactTextContent(
+        'before password="secret value" person@example.test after'
+      )
+    ).toBe('before password=[REDACTED] [REDACTED] after');
+  });
 
   it('flattens bounded attributes and redacts nested sensitive data', () => {
     const circular: Record<string, unknown> = {};

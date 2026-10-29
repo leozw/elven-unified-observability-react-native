@@ -1,4 +1,5 @@
 import { ROOT_CONTEXT, SpanStatusCode, type Context } from '@opentelemetry/api';
+import { Platform } from 'react-native';
 import { Diagnostics } from './core/diagnostics';
 import { resolveConfig, validateConfiguration } from './core/config';
 import type { TelemetryProviders } from './core/providers';
@@ -38,6 +39,14 @@ import type { CapturedErrorDetails } from './instrumentation/errors';
 import { ReactNavigationInstrumentation } from './instrumentation/navigation';
 import { ensurePerformanceTimeOrigin } from './core/runtimeCompatibility';
 import { redactTextContent } from './core/redaction';
+import {
+  acquireOwner,
+  releaseOwner,
+  LifecycleDeadline,
+  activeOwner,
+  globalConsentGranted,
+  setGlobalConsent,
+} from './core/lifecycle';
 
 interface Runtime {
   config: ReturnType<typeof resolveConfig>;
@@ -48,6 +57,7 @@ interface Runtime {
   transport: DurableTransport;
   automatic: AutomaticInstrumentationController;
   eventNames: Set<string>;
+  navigation: Set<ReactNavigationInstrumentation>;
 }
 
 export class ElvenObservabilitySdk {
@@ -60,28 +70,117 @@ export class ElvenObservabilitySdk {
   private runtime: Runtime | undefined;
   private initialization: Promise<ElvenObservabilitySdk> | undefined;
   private shutdownOperation: Promise<FlushResult> | undefined;
+  private generation = 0;
+  private lease: object | undefined;
+  private startingBridge: NativeBridge | undefined;
+  private lastConfiguration: UnifiedObservabilityConfig | undefined;
+  private consentGranted = true;
+  private disabledReason: string | undefined;
+  private configurationEpoch = 0;
+  private startWork: Promise<void> | undefined;
+  private stoppingRuntime: Runtime | undefined;
+  private closingResources:
+    | { bridge?: NativeBridge; purge: boolean; work: Promise<boolean> }
+    | undefined;
 
   constructor() {
     const getRuntime = () => this.runtime;
     this.logs = new LoggingDispatcher(getRuntime);
     this.metrics = new MetricsDispatcher(getRuntime);
     this.traces = new TracingDispatcher(getRuntime);
-    this.context = new ContextDispatcher(getRuntime);
+    this.context = new ContextDispatcher(getRuntime, (identity) => {
+      this.setIdentity({
+        ...this.lastConfiguration?.identity,
+        ...identity,
+      }).catch(() => undefined);
+    });
   }
 
   initialize(
     configuration: UnifiedObservabilityConfig
   ): Promise<ElvenObservabilitySdk> {
+    return this.initializeWithin(
+      configuration,
+      this.lifecycleBudget(configuration.lifecycleTimeoutMillis)
+    );
+  }
+
+  private lifecycleBudget(timeoutMillis = 5_000): LifecycleDeadline {
+    return new LifecycleDeadline(timeoutMillis, () =>
+      this.fence(true, this.runtime ?? this.stoppingRuntime)
+    );
+  }
+
+  private initializeWithin(
+    configuration: UnifiedObservabilityConfig,
+    deadline: LifecycleDeadline
+  ): Promise<ElvenObservabilitySdk> {
+    if (configuration.consent === 'denied') {
+      this.lastConfiguration = configuration;
+      return this.setConsent(false, deadline.remaining()).then(() => this);
+    }
     if (this.state === 'started') return Promise.resolve(this);
     if (this.shutdownOperation) {
-      return this.shutdownOperation.then(() => this.initialize(configuration));
+      return deadline
+        .wait(this.shutdownOperation)
+        .then(() => this.initializeWithin(configuration, deadline))
+        .catch((error: unknown) => {
+          reportInitializationFailure(error, configuration);
+          if (configuration.strictInitialization) throw error;
+          return this;
+        });
     }
     if (this.initialization) return this.initialization;
+    this.lastConfiguration = configuration;
+    if (configuration.consent === 'granted') setGlobalConsent(true);
+    this.consentGranted = globalConsentGranted();
+    if (!this.consentGranted) {
+      this.state = 'stopped';
+      this.disabledReason = 'consent-denied';
+      return Promise.resolve(this);
+    }
+    const lease = {
+      revoke: (timeout?: number) => {
+        this.consentGranted = false;
+        ++this.configurationEpoch;
+        if (this.lastConfiguration)
+          this.lastConfiguration = {
+            ...this.lastConfiguration,
+            consent: 'denied',
+          };
+        return this.shutdown(timeout, { flush: false, purge: true });
+      },
+    };
+    if (!acquireOwner(lease)) {
+      this.state = 'stopped';
+      this.disabledReason = 'another-owner-or-native-cleanup-pending';
+      new Diagnostics({
+        enabled: true,
+        verbose: false,
+        ...(typeof configuration.diagnostics === 'object' &&
+        configuration.diagnostics.sink
+          ? { sink: configuration.diagnostics.sink }
+          : {}),
+      }).warn(
+        'Another mobile telemetry owner is active or cleaning up; this instance is disabled.'
+      );
+      if (configuration.strictInitialization)
+        return Promise.reject(new Error(this.disabledReason));
+      return Promise.resolve(this);
+    }
+    this.lease = lease;
+    this.closingResources = undefined;
+    this.disabledReason = undefined;
+    const generation = ++this.generation;
     this.state = 'starting';
-    this.initialization = this.start(configuration)
+    const starting = this.start(configuration, generation);
+    this.startWork = starting;
+    this.initialization = deadline
+      .wait(starting)
       .then(() => this)
-      .catch(async (error: unknown) => {
-        await this.cleanupFailedInitialization();
+      .catch((error: unknown) => {
+        // fence retains the lease unless actual native/provider cleanup succeeds.
+        this.fence(true);
         this.state = 'stopped';
         reportInitializationFailure(error, configuration);
         if (configuration.strictInitialization) throw error;
@@ -109,7 +208,7 @@ export class ElvenObservabilitySdk {
       const span = runtime.providers.tracer.startSpan('exception', {
         ...(options.context ? { parent: options.context } : {}),
         attributes: {
-          ...attributes,
+          ...runtime.sanitizer.attributes(attributes),
           ...exception,
           'exception.handled': handled,
           'exception.mechanism': mechanism,
@@ -123,7 +222,7 @@ export class ElvenObservabilitySdk {
         options.fatal ? 'fatal' : 'error',
         exception['exception.message'] ?? 'An exception was captured.',
         {
-          ...attributes,
+          ...runtime.sanitizer.attributes(attributes),
           ...exception,
           'exception.handled': handled,
           'exception.mechanism': mechanism,
@@ -158,7 +257,10 @@ export class ElvenObservabilitySdk {
       const metricEventName = boundedEventName(runtime, eventName);
       const span = runtime.providers.tracer.startSpan(`event ${eventName}`, {
         ...(options.context ? { parent: options.context } : {}),
-        attributes: { 'event.name': eventName, ...attributes },
+        attributes: {
+          'event.name': eventName,
+          ...runtime.sanitizer.attributes(attributes),
+        },
       });
       span
         .addEvent(eventName, attributes)
@@ -166,7 +268,10 @@ export class ElvenObservabilitySdk {
       runtime.providers.logger.emit(
         options.level ?? 'info',
         eventName,
-        { 'event.name': eventName, ...attributes },
+        {
+          'event.name': eventName,
+          ...runtime.sanitizer.attributes(attributes),
+        },
         { context: span.context, eventName }
       );
       runtime.providers.metrics.counter(
@@ -186,11 +291,11 @@ export class ElvenObservabilitySdk {
     if (!runtime) return;
     runtime.providers.context.setNavigationContext({
       'app.screen.name': name,
-      ...attributes,
+      ...runtime.sanitizer.attributes(attributes),
     });
     this.event('app.screen.view', {
       'app.screen.name': name,
-      ...attributes,
+      ...runtime.sanitizer.attributes(attributes),
     });
   }
 
@@ -199,10 +304,14 @@ export class ElvenObservabilitySdk {
     options: NavigationInstrumentationOptions = {}
   ): NavigationInstrumentation {
     let delegate: ReactNavigationInstrumentation | undefined;
+    let delegateRuntime: Runtime | undefined;
+    let stopped = false;
     const ensure = (): ReactNavigationInstrumentation | undefined => {
-      if (delegate) return delegate;
       const runtime = this.runtime;
-      if (!runtime) return undefined;
+      if (!runtime || stopped) return undefined;
+      if (delegateRuntime === runtime) return delegate;
+      delegate?.shutdown();
+      if (runtime.navigation.size >= 16) return undefined;
       delegate = new ReactNavigationInstrumentation(
         navigationRef,
         options,
@@ -211,23 +320,48 @@ export class ElvenObservabilitySdk {
         runtime.providers.metrics,
         runtime.providers.context
       );
+      runtime.navigation.add(delegate);
+      delegateRuntime = runtime;
       return delegate;
     };
     return {
-      onReady: () => ensure()?.onReady(),
-      onStateChange: () => ensure()?.onStateChange(),
-      shutdown: () => delegate?.shutdown(),
+      onReady: () => {
+        try {
+          ensure()?.onReady();
+        } catch {
+          /* Navigation telemetry fails open. */
+        }
+      },
+      onStateChange: () => {
+        try {
+          ensure()?.onStateChange();
+        } catch {
+          /* Navigation telemetry fails open. */
+        }
+      },
+      shutdown: () => {
+        stopped = true;
+        if (delegate) delegateRuntime?.navigation.delete(delegate);
+        delegate?.shutdown();
+        delegate = undefined;
+        delegateRuntime = undefined;
+      },
     };
   }
 
   async flush(timeoutMillis?: number): Promise<FlushResult> {
     const runtime = this.runtime;
     if (!runtime) return emptyFlushResult();
+    const generation = this.generation;
+    const budget = new LifecycleDeadline(
+      timeoutMillis ?? runtime.config.lifecycleTimeoutMillis ?? 5_000,
+      () => this.fence(false)
+    );
     try {
-      await runtime.providers.forceFlush();
-      return await runtime.transport.flush(
-        true,
-        timeoutMillis ?? runtime.config.batch.exportTimeoutMillis
+      await budget.wait(runtime.providers.forceFlush());
+      if (generation !== this.generation) return emptyFlushResult();
+      return await budget.wait(
+        runtime.transport.flush(true, budget.remaining())
       );
     } catch (error) {
       runtime.diagnostics.debug('Manual telemetry flush failed.', {
@@ -243,49 +377,82 @@ export class ElvenObservabilitySdk {
     }
   }
 
-  shutdown(timeoutMillis?: number): Promise<FlushResult> {
-    if (this.shutdownOperation) return this.shutdownOperation;
-    this.shutdownOperation = this.stop(timeoutMillis).finally(() => {
+  shutdown(
+    timeoutMillis?: number,
+    options: { flush?: boolean; purge?: boolean } = {}
+  ): Promise<FlushResult> {
+    if (this.shutdownOperation) {
+      if (options.purge || options.flush === false) {
+        const budget = new LifecycleDeadline(timeoutMillis ?? 5_000, () =>
+          this.fence(options.purge ?? false, this.stoppingRuntime)
+        );
+        return budget
+          .wait(this.fence(options.purge ?? false, this.stoppingRuntime))
+          .then((closed) => ({
+            ...emptyFlushResult(),
+            ...(options.purge ? { purged: closed } : {}),
+          }))
+          .catch(() => ({
+            ...emptyFlushResult(),
+            timedOut: true,
+            ...(options.purge ? { purged: false } : {}),
+          }));
+      }
+      return this.shutdownOperation;
+    }
+    this.shutdownOperation = this.stop(timeoutMillis, options).finally(() => {
       this.shutdownOperation = undefined;
     });
     return this.shutdownOperation;
   }
 
-  private async stop(timeoutMillis?: number): Promise<FlushResult> {
-    if (this.initialization) {
-      this.state = 'stopping';
-      await this.initialization.catch(() => undefined);
-    }
+  private async stop(
+    timeoutMillis?: number,
+    options: { flush?: boolean; purge?: boolean } = {}
+  ): Promise<FlushResult> {
     const runtime = this.runtime;
-    if (!runtime) {
-      this.state = 'stopped';
-      return emptyFlushResult();
-    }
+    this.stoppingRuntime = runtime;
     this.state = 'stopping';
-    const timeout = timeoutMillis ?? runtime.config.batch.exportTimeoutMillis;
+    // Public dispatch and automatic collection stop synchronously, before any wait.
+    this.runtime = undefined;
+    ++this.generation;
+    runtime?.automatic.shutdown();
+    const timeout =
+      timeoutMillis ??
+      runtime?.config.lifecycleTimeoutMillis ??
+      this.lastConfiguration?.lifecycleTimeoutMillis ??
+      5_000;
+    const budget = new LifecycleDeadline(timeout, () =>
+      this.fence(options.purge ?? false, runtime)
+    );
     let result = emptyFlushResult();
     try {
-      runtime.providers.logger.info(
-        'Elven observability SDK is shutting down.',
-        {
-          'sdk.state': 'stopping',
-        }
+      if (
+        runtime &&
+        options.flush !== false &&
+        !options.purge &&
+        this.consentGranted
+      ) {
+        await budget.wait(runtime.providers.forceFlush());
+        result = await budget.wait(
+          runtime.transport.flush(true, budget.remaining())
+        );
+      }
+      const closed = await budget.wait(
+        this.fence(options.purge ?? false, runtime)
       );
-      await runtime.automatic.shutdown();
-      await runtime.providers.forceFlush();
-      await runtime.providers.shutdown();
-      result = await runtime.transport.shutdown(timeout);
-      await runtime.bridge.shutdown();
+      if (options.purge) result.purged = closed;
     } catch (error) {
-      runtime.diagnostics.debug('Telemetry shutdown completed with errors.', {
+      runtime?.diagnostics.debug('Telemetry shutdown completed with errors.', {
         error: error instanceof Error ? error.message : String(error),
       });
-      const health = runtime.transport.health();
+      const health = runtime?.transport.health();
       result = {
         delivered: 0,
         dropped: 0,
-        pending: health.queueItems,
+        pending: health?.queueItems ?? 0,
         timedOut: true,
+        ...(options.purge ? { purged: false } : {}),
       };
     } finally {
       this.runtime = undefined;
@@ -294,11 +461,132 @@ export class ElvenObservabilitySdk {
     return result;
   }
 
+  setConsent(granted: boolean, timeoutMillis?: number): Promise<FlushResult> {
+    this.consentGranted = granted;
+    setGlobalConsent(granted);
+    if (!granted) {
+      ++this.configurationEpoch;
+      if (this.lastConfiguration)
+        this.lastConfiguration = {
+          ...this.lastConfiguration,
+          consent: 'denied',
+        };
+      this.disabledReason = 'consent-denied';
+      const owner = activeOwner() as
+        { revoke?: (timeout?: number) => Promise<FlushResult> } | undefined;
+      if (owner && owner !== this.lease && owner.revoke)
+        return owner.revoke(timeoutMillis);
+      if (!owner) {
+        const lease = {
+          revoke: (timeout?: number) =>
+            this.shutdown(timeout, { flush: false, purge: true }),
+        };
+        if (acquireOwner(lease)) {
+          this.lease = lease;
+          this.closingResources = undefined;
+          this.startingBridge = new NativeBridge(
+            new Diagnostics({ enabled: false, verbose: false })
+          );
+        }
+      }
+      if (!this.startingBridge)
+        this.startingBridge = new NativeBridge(
+          new Diagnostics({ enabled: false, verbose: false })
+        );
+      return this.shutdown(timeoutMillis, { flush: false, purge: true });
+    }
+    return this.lastConfiguration
+      ? this.initializeWithin(
+          { ...this.lastConfiguration, consent: 'granted' },
+          this.lifecycleBudget(
+            timeoutMillis ?? this.lastConfiguration.lifecycleTimeoutMillis
+          )
+        ).then(() => emptyFlushResult())
+      : Promise.resolve(emptyFlushResult());
+  }
+
+  async setIdentity(
+    identity: NonNullable<UnifiedObservabilityConfig['identity']>,
+    timeoutMillis?: number
+  ): Promise<void> {
+    if (!this.lastConfiguration) return;
+    await this.reconfigure(
+      { ...this.lastConfiguration, identity },
+      timeoutMillis
+    );
+  }
+
+  async reconfigure(
+    configuration: UnifiedObservabilityConfig,
+    timeoutMillis?: number
+  ): Promise<void> {
+    const epoch = ++this.configurationEpoch;
+    this.lastConfiguration = configuration;
+    const budget = this.lifecycleBudget(
+      timeoutMillis ?? configuration.lifecycleTimeoutMillis
+    );
+    try {
+      const closed = await budget.wait(
+        this.shutdown(budget.remaining(), { flush: false, purge: true })
+      );
+      if (
+        closed.purged === true &&
+        epoch === this.configurationEpoch &&
+        this.consentGranted
+      )
+        await this.initializeWithin(configuration, budget);
+    } catch (error) {
+      reportInitializationFailure(error, configuration);
+      if (configuration.strictInitialization) throw error;
+    }
+  }
+
+  private fence(purge: boolean, runtime = this.runtime): Promise<boolean> {
+    if (this.runtime === runtime) this.runtime = undefined;
+    const bridge = runtime?.bridge ?? this.startingBridge;
+    const lease = this.lease;
+    ++this.generation;
+    this.state = 'stopped';
+    runtime?.transport.stop(purge);
+    runtime?.automatic.shutdown();
+    runtime?.providers.close();
+    if (runtime) {
+      for (const navigation of runtime.navigation) {
+        try {
+          navigation.shutdown();
+        } catch {
+          /* Continue closing. */
+        }
+      }
+      runtime.navigation.clear();
+    }
+    if (this.closingResources && this.closingResources.bridge === bridge) {
+      this.closingResources.purge ||= purge;
+      if (purge) bridge?.close(true);
+      return this.closingResources.work;
+    }
+    const closing = { bridge, purge, work: Promise.resolve(false) };
+    this.closingResources = closing;
+    const nativeClose = bridge?.close(purge) ?? Promise.resolve(true);
+    closing.work = (async () => {
+      const providerClose = runtime?.providers.shutdown();
+      // Wait for real initialization too: a timeout must not release a late initializer.
+      await Promise.allSettled([this.startWork]);
+      const closed = await nativeClose;
+      if (providerClose) await providerClose;
+      const purged = !closing.purge || (await bridge?.close(true)) !== false;
+      if (closed && purged && lease) releaseOwner(lease);
+      return closed && purged;
+    })().catch(() => false);
+    return closing.work;
+  }
+
   health(): SdkHealth {
     const runtime = this.runtime;
     if (!runtime) {
       return {
         state: this.state,
+        ...(this.disabledReason ? { disabledReason: this.disabledReason } : {}),
         nativeBridgeAvailable: false,
         queueItems: 0,
         queueBytes: 0,
@@ -315,7 +603,8 @@ export class ElvenObservabilitySdk {
   }
 
   private async start(
-    configuration: UnifiedObservabilityConfig
+    configuration: UnifiedObservabilityConfig,
+    generation: number
   ): Promise<void> {
     const startedAt = Date.now();
     const config = resolveConfig(configuration);
@@ -332,8 +621,13 @@ export class ElvenObservabilitySdk {
     }
     const sanitizer = new Sanitizer(config.privacy);
     const bridge = new NativeBridge(diagnostics);
+    this.startingBridge = bridge;
     bridge.setDiagnosticsEnabled(config.diagnostics.enabled);
     const platform = await bridge.initialize(config);
+    if (generation !== this.generation || !this.consentGranted) {
+      await bridge.close(true);
+      return;
+    }
     const store = new NativeQueueStore(
       bridge,
       config.queue.enabled,
@@ -345,7 +639,12 @@ export class ElvenObservabilitySdk {
       config,
       store,
       diagnostics,
-      adaptFetch(originalFetch)
+      Platform.OS === 'android' || Platform.OS === 'ios'
+        ? bridge.httpTransport(config.collector.timeoutMillis)
+        : adaptFetch(originalFetch),
+      Date.now,
+      Math.random,
+      bridge.sessionId
     );
     const providers = createTelemetryProviders(
       config,
@@ -375,6 +674,7 @@ export class ElvenObservabilitySdk {
       transport,
       automatic,
       eventNames: new Set(),
+      navigation: new Set(),
     };
     automatic.start();
     this.state = 'started';
@@ -407,23 +707,6 @@ export class ElvenObservabilitySdk {
       }
     );
     if (details.fatal) this.flush().catch(() => undefined);
-  }
-
-  private async cleanupFailedInitialization(): Promise<void> {
-    const runtime = this.runtime;
-    if (!runtime) return;
-    try {
-      await runtime.automatic.shutdown();
-      await runtime.providers.shutdown();
-      await runtime.transport.shutdown(
-        runtime.config.batch.exportTimeoutMillis
-      );
-      await runtime.bridge.shutdown();
-    } catch {
-      // Initialization cleanup is best effort.
-    } finally {
-      this.runtime = undefined;
-    }
   }
 }
 
@@ -545,23 +828,29 @@ class TracingDispatcher implements TracingApi {
     return this.runtime()?.providers.tracer.currentTraceContext();
   }
   restore<T>(traceContext: TraceContext, operation: () => T): T {
-    return (
-      this.runtime()?.providers.tracer.restore(traceContext, operation) ??
-      operation()
-    );
+    const runtime = this.runtime();
+    return runtime
+      ? runtime.providers.tracer.restore(traceContext, operation)
+      : operation();
   }
 }
 
 class ContextDispatcher implements TelemetryContextApi {
-  constructor(private readonly runtime: () => Runtime | undefined) {}
+  constructor(
+    private readonly runtime: () => Runtime | undefined,
+    private readonly identityChange: (
+      identity: NonNullable<UnifiedObservabilityConfig['identity']>
+    ) => void
+  ) {}
 
   capture(): TraceContext | undefined {
     return this.runtime()?.providers.context.capture();
   }
   run<T>(target: Context | TraceContext | undefined, operation: () => T): T {
-    return (
-      this.runtime()?.providers.context.run(target, operation) ?? operation()
-    );
+    const runtime = this.runtime();
+    return runtime
+      ? runtime.providers.context.run(target, operation)
+      : operation();
   }
   bind<T>(target: Context | TraceContext | undefined, value: T): T {
     return this.runtime()?.providers.context.bind(target, value) ?? value;
@@ -582,10 +871,10 @@ class ContextDispatcher implements TelemetryContextApi {
     return this.runtime()?.providers.context.extract(carrier) ?? ROOT_CONTEXT;
   }
   setUser(value: UserContextInput | null): void {
-    this.runtime()?.providers.context.setUser(value);
+    this.identityChange({ user: value });
   }
   setTenant(value: TenantContextInput | null): void {
-    this.runtime()?.providers.context.setTenant(value);
+    this.identityChange({ tenant: value });
   }
   setSession(id: string | null, attributes?: AttributeInputs): void {
     this.runtime()?.providers.context.setSession(id, attributes);
@@ -594,7 +883,7 @@ class ContextDispatcher implements TelemetryContextApi {
     this.runtime()?.providers.context.setBusinessContext(attributes);
   }
   clear(): void {
-    this.runtime()?.providers.context.clear();
+    this.identityChange({ user: null, tenant: null });
   }
 }
 

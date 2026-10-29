@@ -1,34 +1,57 @@
 #import "ElvenUnifiedObservabilityReactNative.h"
 #import "ElvenNativeRuntime.h"
+#import "ElvenHttpTransport.h"
 
-@implementation ElvenUnifiedObservabilityReactNative
+@implementation ElvenUnifiedObservabilityReactNative {
+  ElvenHttpTransport *_http;
+}
+
+@synthesize moduleRegistry = _moduleRegistry;
+
+- (ElvenHttpTransport *)http
+{
+  @synchronized(self) { if (!_http) _http = [ElvenHttpTransport new]; return _http; }
+}
+
+RCT_EXPORT_METHOD(sendHttp:(NSString *)sessionId requestId:(NSString *)requestId endpoint:(NSString *)endpoint
+     headersJson:(NSString *)headersJson body:(NSString *)body timeoutMillis:(double)timeoutMillis
+        resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
+{
+  [[self http] sendWithRegistry:_moduleRegistry session:sessionId requestId:requestId endpoint:endpoint
+                    headersJson:headersJson body:body timeout:timeoutMillis resolve:resolve reject:reject];
+}
+
+RCT_EXPORT_METHOD(abortHttp:(NSString *)sessionId requestId:(NSString *)requestId)
+{
+  [[self http] abortSession:sessionId requestId:requestId];
+}
 
 RCT_EXPORT_MODULE()
 
-- (void)initialize:(NSString *)configurationJson
+RCT_EXPORT_METHOD(initialize:(NSString *)configurationJson
            resolve:(RCTPromiseResolveBlock)resolve
-            reject:(RCTPromiseRejectBlock)reject
+            reject:(RCTPromiseRejectBlock)reject)
 {
   resolve([ElvenNativeRuntime initializeWithConfiguration:configurationJson]);
 }
 
-- (void)drainEvents:(RCTPromiseResolveBlock)resolve
-             reject:(RCTPromiseRejectBlock)reject
+RCT_EXPORT_METHOD(drainEvents:(RCTPromiseResolveBlock)resolve
+             reject:(RCTPromiseRejectBlock)reject)
 {
   resolve([ElvenNativeRuntime drainEvents]);
 }
 
-- (void)readPersistedQueue:(RCTPromiseResolveBlock)resolve
-                    reject:(RCTPromiseRejectBlock)reject
+RCT_EXPORT_METHOD(readPersistedQueue:(RCTPromiseResolveBlock)resolve
+                    reject:(RCTPromiseRejectBlock)reject)
 {
   [ElvenNativeRuntime readPersistedQueue:^(NSString *value) {
     resolve(value);
   }];
 }
 
-- (void)writePersistedQueue:(NSString *)queueJson
+RCT_EXPORT_METHOD(writePersistedQueue:(NSString *)queueJson
                     resolve:(RCTPromiseResolveBlock)resolve
-                     reject:(RCTPromiseRejectBlock)reject
+                     reject:(RCTPromiseRejectBlock)reject)
 {
   [ElvenNativeRuntime writePersistedQueue:queueJson
                                completion:^(BOOL written) {
@@ -36,26 +59,38 @@ RCT_EXPORT_MODULE()
   }];
 }
 
-- (void)clearPersistedQueue:(RCTPromiseResolveBlock)resolve
-                     reject:(RCTPromiseRejectBlock)reject
+RCT_EXPORT_METHOD(clearPersistedQueue:(RCTPromiseResolveBlock)resolve
+                     reject:(RCTPromiseRejectBlock)reject)
 {
   [ElvenNativeRuntime clearPersistedQueue:^(BOOL cleared) {
     resolve(@(cleared));
   }];
 }
 
-- (void)shutdown:(RCTPromiseResolveBlock)resolve
-          reject:(RCTPromiseRejectBlock)reject
+RCT_EXPORT_METHOD(shutdown:(RCTPromiseResolveBlock)resolve
+          reject:(RCTPromiseRejectBlock)reject)
 {
+  [[self http] closeAll];
   resolve(@([ElvenNativeRuntime shutdown]));
 }
 
-- (void)setCurrentTraceContext:(NSString *)traceId spanId:(NSString *)spanId
+- (void)invalidate { [[self http] closeAll]; }
+
+RCT_EXPORT_METHOD(setCurrentTraceContext:(NSString *)traceId spanId:(NSString *)spanId)
 {
   [ElvenNativeRuntime setCurrentTraceId:traceId spanId:spanId];
 }
 
-- (void)setDiagnosticsEnabled:(BOOL)enabled
+RCT_EXPORT_METHOD(closeSession:(NSString *)sessionId
+               purge:(BOOL)purge
+             resolve:(RCTPromiseResolveBlock)resolve
+              reject:(RCTPromiseRejectBlock)reject)
+{
+  [[self http] closeSession:sessionId];
+  [ElvenNativeRuntime closeSession:sessionId purge:purge completion:^(BOOL closed) { resolve(@(closed)); }];
+}
+
+RCT_EXPORT_METHOD(setDiagnosticsEnabled:(BOOL)enabled)
 {
   [ElvenNativeRuntime setDiagnosticsEnabled:enabled];
 }

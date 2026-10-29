@@ -9,7 +9,7 @@
 | React Native 0.87.x, New Architecture, Hermes  | Supported              | Android and iOS                                                                   | External-tarball bare Android/iOS Release CI                      |
 | Expo SDK 57 Development Build / EAS Build      | Supported              | Android and iOS after rebuild                                                     | Executable Expo Android runtime plus Android/iOS Release CI       |
 | Expo SDK 57 prebuild/CNG                       | Full                   | Autolinked by prebuild                                                            | Android and iOS `expo prebuild` validation                        |
-| Expo Go                                        | JS-only fallback       | Native crash, ANR/hang, frame, device, and durable native storage are unavailable | JS fallback tests; native support is not claimed                  |
+| Expo Go                                        | Bounded JS recording   | Native capture/storage unavailable; candidate export deferred without native HTTP | Not export qualification; use a rebuilt Development Build         |
 | Bare React Native                              | Supported              | Autolinking and Codegen                                                           | RN 0.87 external-tarball Android/iOS Release CI                   |
 | React Native Web                               | Best-effort JS path    | None                                                                              | Demo web build only; not part of the mobile support contract      |
 
@@ -18,6 +18,8 @@ The npm peer range is deliberately limited to `react-native >=0.79.0 <0.80.0 || 
 React Native 0.79 is unsupported upstream as of August 2026. Elven compatibility does not restore React Native security fixes or maintenance. Applications should prefer patch 0.79.7 when feasible and keep a documented upgrade plan to a maintained React Native line.
 
 `Supported` means the package, autolinking, Codegen, and native Release build contract passed in the declared matrix. Android runtime and correlated OTLP delivery were also exercised. iOS simulator interaction, physical-device behavior, and MetricKit delivery remain separate acceptance gates and are not implied by compilation.
+
+The 2026-10-29 audit candidate changes native lifecycle and HTTP code and fixes missing Legacy iOS exports. Historical runtime rows do not qualify that new source. See [current candidate validation](VALIDATION.md#2026-10-29-audit-candidate-publication-hold) for exact build/runtime heads; compilation on a declared RN line is not runtime proof of its networking internals. Use the React version required by the host RN/Expo line, not an arbitrary version satisfying the broad SDK peer range.
 
 ## Platform prerequisites
 
@@ -30,7 +32,7 @@ React Native 0.79 is unsupported upstream as of August 2026. Elven compatibility
 | Xcode in bare React Native          | 16.1+ as inherited from React Native 0.87              |
 | Xcode with Expo SDK 57              | 26.4+ per Expo SDK 57                                  |
 | Kotlin                              | Host line (2.1.20/2.2.0 tested); fallback is 2.0.21    |
-| OpenTelemetry JS                    | API 1.9.1, stable SDK 2.10.0, logs/transformer 0.221.0 |
+| OpenTelemetry JS                    | API 1.9.1, stable SDK 2.12.0, logs/transformer 0.223.0 |
 
 ## Capability matrix
 
@@ -54,7 +56,7 @@ React Native 0.79 is unsupported upstream as of August 2026. Elven compatibility
 
 Installing this package changes native code. Expo applications must create a new Development Build or store build after installation or any SDK update that changes native code. An EAS Update cannot add or replace the native module in an already-installed binary. Use an appropriate Expo `runtimeVersion` policy to prevent incompatible updates.
 
-Expo Go does not contain this package's native module. Initialization remains safe and useful, but `health().nativeBridgeAvailable` is `false`, persistence is in memory only, and native-only capabilities are absent.
+Expo Go does not contain this package's native module. `health().nativeBridgeAvailable` is `false`, persistence is in memory only, and native-only capabilities are absent. The audit candidate also defers mobile export without its bounded native HTTP adapter; it does not fall back to full-response native fetch. JS recording remains bounded, not lossless. This migration requires a rebuilt Development Build for export qualification; an OTA-only update cannot supply the adapter. Web keeps its separate fetch path.
 
 ## Compatibility policy
 

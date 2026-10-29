@@ -97,9 +97,14 @@ export class ElvenTracer {
   }
 
   restore<T>(traceContext: TraceContext, operation: () => T): T {
+    let invoked = false;
     try {
-      return this.contextManager.run(traceContext, operation);
+      return this.contextManager.run(traceContext, () => {
+        invoked = true;
+        return operation();
+      });
     } catch (error) {
+      if (invoked) throw error;
       this.diagnostics.debug('Could not restore the supplied trace context.', {
         error: error instanceof Error ? error.message : String(error),
       });

@@ -177,17 +177,18 @@ describe('DurableTransport', () => {
     await shutdown;
   });
 
-  it('bounds server Retry-After values to the configured retry delay', async () => {
+  it('keeps a server minimum above maxDelay for normal and forced flush, including new batches', async () => {
     const store = new MemoryStore();
-    const now = 10_000;
+    let now = 10_000;
+    const sending = jest.fn(async () => ({
+      status: 429,
+      headers: { get: () => '60' },
+    }));
     const transport = new DurableTransport(
       resolvedConfiguration({ retry: { maxDelayMillis: 5_000 } }),
       store,
       diagnostics(),
-      async () => ({
-        status: 429,
-        headers: { get: () => '86400' },
-      }),
+      sending,
       () => now
     );
 
@@ -196,8 +197,165 @@ describe('DurableTransport', () => {
     const persisted = JSON.parse(store.value ?? '{}') as {
       items: Array<{ nextAttemptUnixMillis: number }>;
     };
-    expect(persisted.items[0]?.nextAttemptUnixMillis).toBe(now + 5_000);
-    await transport.shutdown(1_000);
+    expect(persisted.items[0]?.nextAttemptUnixMillis).toBe(now + 60_000);
+    now += 5_000;
+    await transport.enqueue('metrics', 'new-batch');
+    await transport.flush(false, 1_000);
+    await transport.flush(true, 1_000);
+    expect(sending).toHaveBeenCalledTimes(1);
+    now += 55_000;
+    await transport.flush(true, 1_000);
+    expect(sending).toHaveBeenCalledTimes(2);
+    transport.stop(true);
+  });
+
+  it.each(['Wed, 21 Oct 2026 10:01:00 GMT', '60'])(
+    'persists Retry-After %s across restore without sleeping in flush',
+    async (header) => {
+      let now = Date.parse('Wed, 21 Oct 2026 10:00:00 GMT');
+      const store = new MemoryStore();
+      const sending = jest.fn(async () => ({
+        status: 503,
+        headers: { get: () => header },
+      }));
+      const config = resolvedConfiguration({
+        retry: { maxDelayMillis: 5_000 },
+      });
+      const first = new DurableTransport(
+        config,
+        store,
+        diagnostics(),
+        sending,
+        () => now
+      );
+      await first.enqueue('logs', 'retry');
+      await first.flush(true, 1);
+      first.stop();
+      const restored = new DurableTransport(
+        config,
+        store,
+        diagnostics(),
+        sending,
+        () => now
+      );
+      now += 59_999;
+      const result = await restored.flush(true, 1);
+      expect(result.pending).toBe(1);
+      expect(sending).toHaveBeenCalledTimes(1);
+      now += 1;
+      await restored.flush(false, 1);
+      expect(sending).toHaveBeenCalledTimes(2);
+      restored.stop(true);
+    }
+  );
+
+  it('shares server floors only between signals with the same destination and honors them on shutdown', async () => {
+    const sending = jest.fn(async () => ({
+      status: 429,
+      headers: { get: () => '60' },
+    }));
+    const transport = new DurableTransport(
+      resolvedConfiguration({
+        collector: {
+          endpoint: 'https://collector.example.test',
+          logsEndpoint: 'https://collector.example.test/shared',
+          metricsEndpoint: 'https://collector.example.test/shared',
+        },
+      }),
+      new MemoryStore(),
+      diagnostics(),
+      sending,
+      () => 10_000
+    );
+    await transport.enqueue('logs', 'limited');
+    await transport.enqueue('metrics', 'same-endpoint');
+    await transport.enqueue('traces', 'separate-endpoint');
+    await transport.flush(true, 100);
+    expect(sending).toHaveBeenCalledTimes(2);
+    expect((await transport.shutdown(100)).pending).toBe(3);
+    expect(sending).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    '999999999999999999999999999999',
+    '9'.repeat(10000),
+    'Wed, 21 Oct 2099 10:00:00 GMT',
+  ])(
+    'drops rather than retrying before an unretainable server minimum',
+    async (header) => {
+      const now = Date.parse('2026-10-29T00:00:00Z');
+      const store = new MemoryStore();
+      const sending = jest.fn(async () => ({
+        status: 429,
+        headers: { get: () => header },
+      }));
+      const transport = new DurableTransport(
+        resolvedConfiguration(),
+        store,
+        diagnostics(),
+        sending,
+        () => now
+      );
+      await transport.enqueue('logs', 'old');
+      expect((await transport.flush(true, 1)).dropped).toBe(1);
+      expect(await transport.enqueue('logs', 'new')).toBe(false);
+      await transport.flush();
+      await transport.flush(true, 1);
+      await transport.shutdown(1);
+      expect(sending).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(store.value!).items).toHaveLength(0);
+      expect(jest.getTimerCount()).toBe(0);
+    }
+  );
+
+  it('uses normal bounded backoff for malformed hints and does not delay for a past date', async () => {
+    const now = Date.parse('2026-10-29T00:00:00Z');
+    for (const header of ['not a date', 'Wed, 21 Oct 2026 10:00:00 GMT']) {
+      const sending = jest.fn(async () => ({
+        status: 429,
+        headers: { get: () => header },
+      }));
+      const transport = new DurableTransport(
+        resolvedConfiguration(),
+        new MemoryStore(),
+        diagnostics(),
+        sending,
+        () => now
+      );
+      await transport.enqueue('logs', 'retry');
+      await transport.flush(true, 1);
+      await transport.flush(true, 1);
+      expect(sending).toHaveBeenCalledTimes(2);
+      transport.stop(true);
+    }
+  });
+
+  it('isolates a throwing platform abort from the export timeout callback', async () => {
+    const platform = globalThis as unknown as {
+      AbortController?: new () => { signal: unknown; abort(): void };
+    };
+    const previous = platform.AbortController;
+    platform.AbortController = class {
+      readonly signal = {};
+      abort(): void {
+        throw new Error('broken platform abort');
+      }
+    };
+    const transport = new DurableTransport(
+      resolvedConfiguration(),
+      new MemoryStore(),
+      diagnostics(),
+      () => new Promise(() => undefined)
+    );
+    try {
+      await transport.enqueue('logs', 'pending');
+      const flush = transport.flush(true, 5);
+      await jest.advanceTimersByTimeAsync(5);
+      expect((await flush).timedOut).toBe(true);
+      transport.stop(true);
+    } finally {
+      platform.AbortController = previous;
+    }
   });
 
   it('discards corrupt persisted state and retains only valid, unexpired items', async () => {

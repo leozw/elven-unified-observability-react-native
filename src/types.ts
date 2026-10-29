@@ -121,6 +121,14 @@ export interface DiagnosticsConfig {
 }
 
 export interface UnifiedObservabilityConfig {
+  /** Defaults to granted for compatibility. Denied never starts collection. */
+  consent?: 'granted' | 'denied';
+  lifecycleTimeoutMillis?: number;
+  /** Set before initialization to restore only this identity's durable queue. */
+  identity?: {
+    user?: UserContextInput | null;
+    tenant?: TenantContextInput | null;
+  };
   serviceName: string;
   version?: string;
   environment?: string;
@@ -150,6 +158,11 @@ export interface ResolvedCollectorConfig {
 }
 
 export interface ResolvedConfig {
+  lifecycleTimeoutMillis?: number;
+  identity?: {
+    user?: UserContextInput | null;
+    tenant?: TenantContextInput | null;
+  };
   serviceName: string;
   version: string;
   environment: string;
@@ -381,6 +394,8 @@ export interface BusinessEventOptions {
 }
 
 export interface FlushResult {
+  /** Native purge was acknowledged; false/undefined must not be treated as erased. */
+  purged?: boolean;
   delivered: number;
   dropped: number;
   pending: number;
@@ -388,6 +403,7 @@ export interface FlushResult {
 }
 
 export interface SdkHealth {
+  disabledReason?: string;
   state: 'idle' | 'starting' | 'started' | 'stopping' | 'stopped';
   nativeBridgeAvailable: boolean;
   queueItems: number;

@@ -1,5 +1,7 @@
 import { createEventId } from '../core/ids';
 import { utf8ByteLength } from '../core/encoding';
+import { queueProvenance } from '../core/provenance';
+import { LifecycleDeadline } from '../core/lifecycle';
 import type { Diagnostics } from '../core/diagnostics';
 import type { ResolvedConfig, SignalType } from '../types';
 import type { QueueStore } from './storage';
@@ -14,7 +16,7 @@ import type {
 
 interface SendResult {
   outcome: 'delivered' | 'permanent-failure' | 'transient-failure';
-  retryAfterMillis?: number;
+  retryNotBefore?: number;
   status?: number;
 }
 
@@ -26,7 +28,7 @@ interface AbortControllerLike {
 type AbortControllerConstructor = new () => AbortControllerLike;
 
 const CONTENT_TYPE = 'application/json';
-const PERSISTED_SCHEMA_VERSION = 1;
+const PERSISTED_SCHEMA_VERSION = 2;
 
 export class DurableTransport {
   private items: QueueItem[] = [];
@@ -35,11 +37,18 @@ export class DurableTransport {
   private transportFailures = 0;
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
+  private retryNotBefore: Partial<Record<SignalType, number>> = {};
   private lastSuccessfulExportUnixMillis: number | undefined;
   private mutation = Promise.resolve();
   private flushPromise: Promise<TransportFlushResult> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private accepting = true;
+  private closed = false;
+  private readonly controllers = new Set<AbortControllerLike>();
+  private readonly stopWaiters = new Set<() => void>();
+  readonly provenance: string;
+  private pendingItems = 0;
+  private pendingBytes = 0;
   private readonly ready: Promise<void>;
 
   constructor(
@@ -48,9 +57,15 @@ export class DurableTransport {
     private readonly diagnostics: Diagnostics,
     private readonly fetchImplementation: TransportFetch | undefined,
     private readonly now: () => number = Date.now,
-    private readonly random: () => number = Math.random
+    private readonly random: () => number = Math.random,
+    readonly ownerGeneration: string = createEventId()
   ) {
-    this.ready = this.restore();
+    this.provenance = queueProvenance(config);
+    this.ready = this.restore().catch(() => {
+      this.diagnostics.warn(
+        'Durable storage read failed; only the in-memory queue is available.'
+      );
+    });
   }
 
   async enqueue(
@@ -59,6 +74,10 @@ export class DurableTransport {
     priority = 1
   ): Promise<boolean> {
     if (!this.accepting || !this.config.signals[signal]) return false;
+    if (payload.length > this.config.queue.maxItemBytes) {
+      this.droppedItems += 1;
+      return false;
+    }
     const byteLength = utf8ByteLength(payload);
     if (byteLength === 0 || byteLength > this.config.queue.maxItemBytes) {
       this.droppedItems += 1;
@@ -72,8 +91,26 @@ export class DurableTransport {
       );
       return false;
     }
+    if (
+      this.pendingItems >= this.config.queue.maxItems ||
+      this.pendingBytes + byteLength > this.config.queue.maxBytes
+    ) {
+      this.droppedItems += 1;
+      return false;
+    }
+    this.pendingItems += 1;
+    this.pendingBytes += byteLength;
 
     const now = this.now();
+    if (
+      (this.retryNotBefore[signal] ?? 0) >=
+      now + this.config.queue.maxAgeMillis
+    ) {
+      this.pendingItems -= 1;
+      this.pendingBytes -= byteLength;
+      this.droppedItems += 1;
+      return false;
+    }
     const item: QueueItem = {
       id: createEventId(),
       signal,
@@ -86,6 +123,14 @@ export class DurableTransport {
     };
 
     const accepted = await this.withMutation(async () => {
+      if (!this.accepting) return false;
+      if (
+        (this.retryNotBefore[signal] ?? 0) >=
+        item.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis
+      ) {
+        this.droppedItems += 1;
+        return false;
+      }
       this.purgeExpired(now);
       this.items.push(item);
       this.queueBytes += item.byteLength;
@@ -93,6 +138,9 @@ export class DurableTransport {
       const retained = this.items.some((candidate) => candidate.id === item.id);
       await this.persist();
       return retained;
+    }).finally(() => {
+      this.pendingItems -= 1;
+      this.pendingBytes -= byteLength;
     });
 
     if (accepted) {
@@ -112,6 +160,7 @@ export class DurableTransport {
     force = false,
     timeoutMillis = this.config.batch.exportTimeoutMillis
   ): Promise<TransportFlushResult> {
+    if (this.closed) return Promise.resolve(this.result());
     if (this.flushPromise) return this.flushPromise;
     this.clearTimer();
     this.flushPromise = this.runFlush(force, timeoutMillis).finally(() => {
@@ -124,9 +173,50 @@ export class DurableTransport {
   async shutdown(timeoutMillis: number): Promise<TransportFlushResult> {
     this.accepting = false;
     this.clearTimer();
-    const result = await this.flush(true, timeoutMillis);
-    await this.withMutation(() => this.persist());
-    return result;
+    const budget = new LifecycleDeadline(timeoutMillis, () => this.stop());
+    try {
+      return await budget.wait(this.flush(true, budget.remaining()));
+    } catch {
+      return { ...this.result(), timedOut: true };
+    } finally {
+      this.stop();
+    }
+  }
+
+  stop(purge = false): void {
+    this.closed = true;
+    this.accepting = false;
+    this.clearTimer();
+    for (const resume of this.stopWaiters) resume();
+    this.stopWaiters.clear();
+    for (const controller of this.controllers) {
+      try {
+        controller.abort();
+      } catch {
+        /* Broken abort implementations cannot reopen the transport. */
+      }
+    }
+    this.controllers.clear();
+    if (purge) {
+      this.droppedItems += this.items.length;
+      this.items = [];
+      this.queueBytes = 0;
+      this.retryNotBefore = {};
+    }
+  }
+
+  async purge(): Promise<boolean> {
+    this.stop(true);
+    return this.store.clear();
+  }
+
+  private result(): TransportFlushResult {
+    return {
+      delivered: 0,
+      dropped: 0,
+      pending: this.items.length,
+      timedOut: false,
+    };
   }
 
   health(): TransportHealth {
@@ -149,32 +239,69 @@ export class DurableTransport {
     timeoutMillis: number
   ): Promise<TransportFlushResult> {
     await this.ready;
+    if (this.closed) return this.result();
     const deadline = this.now() + Math.max(1, timeoutMillis);
     const attempted = new Set<string>();
     let delivered = 0;
     let dropped = 0;
     let timedOut = false;
 
-    while (this.now() < deadline) {
+    while (!this.closed && this.now() < deadline) {
       const item = await this.withMutation(() => {
+        if (this.closed) return undefined;
         this.purgeExpired(this.now());
         if (!force && this.circuitOpenUntil > this.now()) return undefined;
         return this.items.find(
           (candidate) =>
             !attempted.has(candidate.id) &&
+            (this.retryNotBefore[candidate.signal] ?? 0) <= this.now() &&
             (force || candidate.nextAttemptUnixMillis <= this.now())
         );
       });
-      if (!item) break;
+      if (!item || this.closed) break;
       attempted.add(item.id);
 
       const remaining = Math.max(1, deadline - this.now());
       const result = await this.send(item, remaining);
+      if (this.closed) break;
       const update = await this.withMutation(async () => {
+        if (this.closed) return { delivered: 0, dropped: 0 };
+        let floorDrops = 0;
+        if (result.retryNotBefore !== undefined) {
+          for (const signal of ['logs', 'metrics', 'traces'] as const) {
+            if (
+              this.config.collector[`${signal}Endpoint`] ===
+              this.config.collector[`${item.signal}Endpoint`]
+            )
+              this.retryNotBefore[signal] = Math.max(
+                this.retryNotBefore[signal] ?? 0,
+                result.retryNotBefore
+              );
+          }
+          for (
+            let position = this.items.length - 1;
+            position >= 0;
+            position -= 1
+          ) {
+            const queued = this.items[position];
+            if (
+              queued &&
+              (this.retryNotBefore[queued.signal] ?? 0) >=
+                queued.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis
+            ) {
+              this.removeAt(position);
+              floorDrops += 1;
+              this.droppedItems += 1;
+            }
+          }
+        }
         const index = this.items.findIndex(
           (candidate) => candidate.id === item.id
         );
-        if (index < 0) return { delivered: 0, dropped: 0 };
+        if (index < 0) {
+          await this.persist();
+          return { delivered: 0, dropped: floorDrops };
+        }
 
         if (result.outcome === 'delivered') {
           this.removeAt(index);
@@ -195,19 +322,19 @@ export class DurableTransport {
           this.removeAt(index);
           this.droppedItems += 1;
           await this.persist();
-          return { delivered: 0, dropped: 1 };
+          return { delivered: 0, dropped: 1 + floorDrops };
         }
 
         this.transportFailures += 1;
         this.consecutiveFailures += 1;
-        const requestedDelay =
-          result.retryAfterMillis ?? this.retryDelay(current.attempts);
-        current.nextAttemptUnixMillis =
+        current.nextAttemptUnixMillis = Math.max(
           this.now() +
-          Math.min(
-            this.config.retry.maxDelayMillis,
-            Math.max(0, requestedDelay)
-          );
+            Math.min(
+              this.config.retry.maxDelayMillis,
+              this.retryDelay(current.attempts)
+            ),
+          this.retryNotBefore[current.signal] ?? 0
+        );
         if (
           this.consecutiveFailures >=
           this.config.retry.circuitBreakerFailureThreshold
@@ -216,7 +343,7 @@ export class DurableTransport {
             this.now() + this.config.retry.circuitBreakerResetMillis;
         }
         await this.persist();
-        return { delivered: 0, dropped: 0 };
+        return { delivered: 0, dropped: floorDrops };
       });
       delivered += update.delivered;
       dropped += update.dropped;
@@ -237,7 +364,7 @@ export class DurableTransport {
     item: QueueItem,
     remainingMillis: number
   ): Promise<SendResult> {
-    if (!this.fetchImplementation) {
+    if (this.closed || !this.fetchImplementation) {
       return { outcome: 'transient-failure' };
     }
 
@@ -252,6 +379,7 @@ export class DurableTransport {
     const controller = AbortControllerValue
       ? new AbortControllerValue()
       : undefined;
+    if (controller) this.controllers.add(controller);
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {
@@ -266,7 +394,11 @@ export class DurableTransport {
       });
       const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
-          controller?.abort();
+          try {
+            controller?.abort();
+          } catch {
+            /* A broken platform abort must not escape the timer callback. */
+          }
           reject(new Error('Telemetry export timed out.'));
         }, timeoutMillis);
       });
@@ -279,6 +411,7 @@ export class DurableTransport {
       });
       return { outcome: 'transient-failure' };
     } finally {
+      if (controller) this.controllers.delete(controller);
       if (timeout) clearTimeout(timeout);
     }
   }
@@ -297,21 +430,48 @@ export class DurableTransport {
 
   private async restore(): Promise<void> {
     const serialized = await this.store.read();
+    if (this.closed) return;
     if (!serialized) return;
     try {
+      if (serialized.length > this.config.queue.maxBytes * 8 + 1_048_576)
+        throw new Error('Oversized durable queue.');
       const parsed = JSON.parse(serialized) as Partial<PersistedQueue>;
       if (
+        serialized.length > this.config.queue.maxBytes * 8 + 1_048_576 ||
         parsed.schemaVersion !== PERSISTED_SCHEMA_VERSION ||
+        parsed.provenance !== this.provenance ||
         !Array.isArray(parsed.items)
       ) {
         throw new Error('Unsupported durable queue schema.');
       }
       const now = this.now();
-      for (const candidate of parsed.items) {
+      if (isRecord(parsed.retryNotBefore)) {
+        for (const signal of ['logs', 'metrics', 'traces'] as const) {
+          const floor = parsed.retryNotBefore[signal];
+          if (
+            typeof floor === 'number' &&
+            Number.isSafeInteger(floor) &&
+            floor > now
+          )
+            this.retryNotBefore[signal] = floor;
+        }
+      }
+      for (const candidate of parsed.items.slice(
+        0,
+        this.config.queue.maxItems
+      )) {
+        if (
+          typeof candidate?.payload !== 'string' ||
+          candidate.payload.length > this.config.queue.maxItemBytes
+        )
+          continue;
         const item = validateQueueItem(candidate);
         if (
           item &&
+          this.config.signals[item.signal] &&
           now - item.enqueuedAtUnixMillis <= this.config.queue.maxAgeMillis &&
+          (this.retryNotBefore[item.signal] ?? 0) <
+            item.enqueuedAtUnixMillis + this.config.queue.maxAgeMillis &&
           item.byteLength <= this.config.queue.maxItemBytes
         ) {
           this.items.push(item);
@@ -319,6 +479,7 @@ export class DurableTransport {
         }
       }
       this.enforceLimits();
+      await this.persist();
       this.scheduleNextAttempt();
     } catch (error) {
       this.items = [];
@@ -332,7 +493,15 @@ export class DurableTransport {
 
   private withMutation<T>(operation: () => Promise<T> | T): Promise<T> {
     const result = this.mutation.then(async () => {
-      await this.ready;
+      if (!this.closed)
+        await new Promise<void>((resolve) => {
+          const resume = (): void => {
+            this.stopWaiters.delete(resume);
+            resolve();
+          };
+          this.stopWaiters.add(resume);
+          this.ready.then(resume, resume);
+        });
       return operation();
     });
     this.mutation = result.then(
@@ -343,13 +512,23 @@ export class DurableTransport {
   }
 
   private async persist(): Promise<void> {
-    if (!this.store.persistent) return;
-    if (this.items.length === 0) {
+    if (this.closed || !this.store.persistent) return;
+    for (const signal of ['logs', 'metrics', 'traces'] as const) {
+      if ((this.retryNotBefore[signal] ?? 0) <= this.now())
+        delete this.retryNotBefore[signal];
+    }
+    if (
+      this.items.length === 0 &&
+      Object.keys(this.retryNotBefore).length === 0
+    ) {
       await this.store.clear();
       return;
     }
     const persisted: PersistedQueue = {
       schemaVersion: PERSISTED_SCHEMA_VERSION,
+      provenance: this.provenance,
+      ownerGeneration: this.ownerGeneration,
+      retryNotBefore: this.retryNotBefore,
       items: this.items,
     };
     await this.store.write(JSON.stringify(persisted));
@@ -395,7 +574,7 @@ export class DurableTransport {
           });
         });
       },
-      Math.max(0, delayMillis)
+      Math.min(2_147_483_647, Math.max(0, delayMillis))
     );
   }
 
@@ -403,7 +582,12 @@ export class DurableTransport {
     if (!this.accepting || this.items.length === 0) return;
     const now = this.now();
     const nextItemAt = Math.min(
-      ...this.items.map((item) => item.nextAttemptUnixMillis)
+      ...this.items.map((item) =>
+        Math.max(
+          item.nextAttemptUnixMillis,
+          this.retryNotBefore[item.signal] ?? 0
+        )
+      )
     );
     const nextAt = Math.max(nextItemAt, this.circuitOpenUntil);
     this.schedule(Math.max(0, nextAt - now));
@@ -433,18 +617,25 @@ function classifyResponse(
       outcome: 'transient-failure',
       status: response.status,
       ...(retryAfter
-        ? { retryAfterMillis: parseRetryAfter(retryAfter, now) }
+        ? { retryNotBefore: parseRetryAfter(retryAfter, now) }
         : {}),
     };
   }
   return { outcome: 'permanent-failure', status: response.status };
 }
 
-function parseRetryAfter(value: string, now: number): number {
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? Math.max(0, timestamp - now) : 0;
+function parseRetryAfter(value: string, now: number): number | undefined {
+  // Reject oversized/overflowing hints conservatively without scanning or long sleeps.
+  if (value.length > 256) return Number.MAX_SAFE_INTEGER;
+  const text = value.trim();
+  if (/^\d+$/.test(text)) {
+    const timestamp = now + Number(text) * 1_000;
+    return Number.isSafeInteger(timestamp)
+      ? timestamp
+      : Number.MAX_SAFE_INTEGER;
+  }
+  const timestamp = Date.parse(text);
+  return Number.isFinite(timestamp) ? Math.max(now, timestamp) : undefined;
 }
 
 function validateQueueItem(value: unknown): QueueItem | undefined {
@@ -460,6 +651,12 @@ function validateQueueItem(value: unknown): QueueItem | undefined {
   ) {
     return undefined;
   }
+  if (
+    !Number.isFinite(value.enqueuedAtUnixMillis) ||
+    !Number.isFinite(value.attempts) ||
+    !Number.isFinite(value.nextAttemptUnixMillis)
+  )
+    return undefined;
   const actualByteLength = utf8ByteLength(value.payload);
   return {
     id: value.id,

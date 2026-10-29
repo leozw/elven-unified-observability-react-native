@@ -100,6 +100,94 @@ describe('NetworkInstrumentation fetch', () => {
     (globalThis as { fetch?: typeof fetch }).fetch = originalFetch;
   });
 
+  it('preserves requests and their outcomes when telemetry setup or completion throws', async () => {
+    for (const phase of ['start', 'context', 'finish']) {
+      const successfulResponse = response(200);
+      const applicationError = new Error('original application failure');
+      const original = jest.fn(async (input) => {
+        if (String(input).includes('/failure')) throw applicationError;
+        return successfulResponse;
+      }) as jest.MockedFunction<typeof fetch>;
+      globalThis.fetch = original;
+      const config = resolvedConfiguration({
+        instrumentations: { network: { enabled: true, xhr: false } },
+      });
+      const fakes = networkFakes();
+      if (phase === 'start')
+        fakes.startSpan.mockImplementation(() => {
+          throw new Error('telemetry failure');
+        });
+      if (phase === 'finish')
+        fakes.metricCounter.mockImplementation(() => {
+          throw new Error('telemetry failure');
+        });
+      if (phase === 'context')
+        fakes.startSpan.mockImplementation(() => {
+          const span = new FakeSpan();
+          span.run = () => {
+            throw new Error('context manager failure');
+          };
+          return span;
+        });
+      const instrumentation = new NetworkInstrumentation(
+        config,
+        fakes.tracer,
+        fakes.logger,
+        fakes.metrics,
+        fakes.context,
+        new Sanitizer(config.privacy),
+        new Diagnostics({ enabled: false, verbose: false }),
+        original
+      );
+      instrumentation.start();
+      try {
+        await expect(
+          globalThis.fetch('https://api.example.test/success')
+        ).resolves.toBe(successfulResponse);
+        await expect(
+          globalThis.fetch('https://api.example.test/failure')
+        ).rejects.toBe(applicationError);
+        expect(original).toHaveBeenCalledTimes(2);
+      } finally {
+        instrumentation.shutdown();
+      }
+    }
+  });
+
+  it('does not repeat an ignored request that throws synchronously', async () => {
+    const applicationError = new Error('ignored request failure');
+    const original = jest.fn<
+      ReturnType<typeof fetch>,
+      Parameters<typeof fetch>
+    >(() => {
+      throw applicationError;
+    });
+    globalThis.fetch = original;
+    const config = resolvedConfiguration({
+      instrumentations: { network: { enabled: true, xhr: false } },
+    });
+    const fakes = networkFakes();
+    const instrumentation = new NetworkInstrumentation(
+      config,
+      fakes.tracer,
+      fakes.logger,
+      fakes.metrics,
+      fakes.context,
+      new Sanitizer(config.privacy),
+      new Diagnostics({ enabled: false, verbose: false }),
+      original
+    );
+    instrumentation.start();
+    try {
+      await expect(
+        globalThis.fetch('https://collector.example.test/v1/logs')
+      ).rejects.toBe(applicationError);
+      expect(original).toHaveBeenCalledTimes(1);
+    } finally {
+      instrumentation.shutdown();
+    }
+  });
+
   it('propagates only to trusted origins and never captures query values or bodies', async () => {
     const calls: Array<{ input: string; init?: RequestInit }> = [];
     const original = jest.fn<
@@ -217,6 +305,7 @@ class FakeXmlHttpRequest {
   }
 
   send(): void {
+    if (this.url.includes('pending')) return;
     if (this.url.includes('failure')) {
       this.status = 0;
       this.emit('error');
@@ -251,6 +340,53 @@ describe('NetworkInstrumentation XHR', () => {
     (globalThis as { XMLHttpRequest?: typeof XMLHttpRequest }).XMLHttpRequest =
       originalXhr;
     FakeXmlHttpRequest.instances = [];
+  });
+
+  it('detaches pending listeners on shutdown and survives telemetry failures', () => {
+    globalThis.XMLHttpRequest =
+      FakeXmlHttpRequest as unknown as typeof XMLHttpRequest;
+    const config = resolvedConfiguration({
+      instrumentations: { network: { enabled: true, fetch: false } },
+    });
+    const fakes = networkFakes();
+    const instrumentation = new NetworkInstrumentation(
+      config,
+      fakes.tracer,
+      fakes.logger,
+      fakes.metrics,
+      fakes.context,
+      new Sanitizer(config.privacy),
+      new Diagnostics({ enabled: false, verbose: false }),
+      undefined
+    );
+    instrumentation.start();
+    instrumentation.start();
+    const pending = new XMLHttpRequest();
+    pending.open('GET', 'https://api.example.test/pending');
+    pending.send();
+    const instance = pending as unknown as FakeXmlHttpRequest;
+    expect(
+      [...instance.listeners.values()].some((listeners) => listeners.size > 0)
+    ).toBe(true);
+    fakes.metricCounter.mockImplementation(() => {
+      throw new Error('telemetry failure');
+    });
+    const success = new XMLHttpRequest();
+    success.open('GET', 'https://api.example.test/success');
+    expect(() => success.send()).not.toThrow();
+    fakes.startSpan.mockImplementation(() => {
+      throw new Error('telemetry failure');
+    });
+    const fallback = new XMLHttpRequest();
+    fallback.open('GET', 'https://api.example.test/success');
+    expect(() => fallback.send()).not.toThrow();
+    instrumentation.shutdown();
+    expect(
+      [...instance.listeners.values()].every(
+        (listeners) => listeners.size === 0
+      )
+    ).toBe(true);
+    expect(fakes.spans[0]?.ended).toBe(1);
   });
 
   it('creates one XHR span, propagates context, and finishes errors once', () => {

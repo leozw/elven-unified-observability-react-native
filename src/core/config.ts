@@ -40,6 +40,19 @@ export function validateConfiguration(
       message: 'serviceName is required and cannot be blank.',
     });
   }
+  for (const id of [
+    config.identity?.user?.id,
+    config.identity?.tenant?.id,
+    config.sessionId,
+  ]) {
+    if (id !== undefined && (typeof id !== 'string' || id.length > 1024))
+      issues.push({
+        level: 'error',
+        path: 'identity',
+        message:
+          'Identity/session IDs must be strings of at most 1024 characters.',
+      });
+  }
   if (!isHttpUrl(config.collector?.endpoint)) {
     issues.push({
       level: 'error',
@@ -218,6 +231,18 @@ export function resolveConfig(
   const diagnostics = normalizeDiagnostics(config.diagnostics);
 
   return {
+    lifecycleTimeoutMillis: clampInteger(
+      config.lifecycleTimeoutMillis,
+      5_000,
+      1,
+      30_000
+    ),
+    identity: {
+      ...(config.identity?.user ? { user: { ...config.identity.user } } : {}),
+      ...(config.identity?.tenant
+        ? { tenant: { ...config.identity.tenant } }
+        : {}),
+    },
     serviceName: config.serviceName.trim(),
     version: config.version?.trim() || '0.0.0',
     environment,
@@ -508,9 +533,14 @@ function normalizeDiagnostics(
 function normalizeResourceAttributes(input: unknown): Attributes {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
   const output: Attributes = {};
-  for (const [key, value] of Object.entries(input)) {
+  let inspected = 0;
+  for (const key in input) {
+    if (++inspected > 256) break;
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!descriptor || !('value' in descriptor) || key.length > 128) continue;
+    const value = descriptor.value as unknown;
     if (
-      typeof value === 'string' ||
+      (typeof value === 'string' && value.length <= 65_536) ||
       typeof value === 'boolean' ||
       (typeof value === 'number' && Number.isFinite(value))
     ) {

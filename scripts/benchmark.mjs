@@ -183,6 +183,7 @@ function reactNativeStub() {
       builder.onLoad({ filter: /.*/, namespace: 'react-native-stub' }, () => ({
         contents: `
             export const TurboModuleRegistry = { get: () => null };
+            export const Platform = { OS: 'web' };
             export const AppState = {
               currentState: 'active',
               addEventListener: () => ({ remove() {} }),

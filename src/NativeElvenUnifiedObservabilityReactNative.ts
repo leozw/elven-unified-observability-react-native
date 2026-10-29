@@ -7,6 +7,16 @@ export interface Spec extends TurboModule {
   writePersistedQueue(queueJson: string): Promise<boolean>;
   clearPersistedQueue(): Promise<boolean>;
   shutdown(): Promise<boolean>;
+  closeSession(sessionId: string, purge: boolean): Promise<boolean>;
+  sendHttp(
+    sessionId: string,
+    requestId: string,
+    endpoint: string,
+    headersJson: string,
+    body: string,
+    timeoutMillis: number
+  ): Promise<string>;
+  abortHttp(sessionId: string, requestId: string): void;
   setCurrentTraceContext(traceId: string, spanId: string): void;
   setDiagnosticsEnabled(enabled: boolean): void;
 }

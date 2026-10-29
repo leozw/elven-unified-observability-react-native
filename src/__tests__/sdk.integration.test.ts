@@ -1,4 +1,5 @@
 import { ElvenObservabilitySdk } from '../sdk';
+import { Platform } from 'react-native';
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { UnifiedObservabilityConfig } from '../types';
 
@@ -37,6 +38,13 @@ function integrationConfig(): UnifiedObservabilityConfig {
 }
 
 describe('ElvenObservabilitySdk OTLP integration', () => {
+  const originalPlatform = Platform.OS;
+  beforeAll(() => {
+    Object.assign(Platform, { OS: 'web' });
+  });
+  afterAll(() => {
+    Object.assign(Platform, { OS: originalPlatform });
+  });
   const originalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
 
   afterEach(() => {
@@ -212,17 +220,22 @@ describe('ElvenObservabilitySdk OTLP integration', () => {
     }) as typeof fetch;
     const sdk = new ElvenObservabilitySdk();
     const internals = sdk as unknown as {
-      start(config: UnifiedObservabilityConfig): Promise<void>;
+      start(
+        config: UnifiedObservabilityConfig,
+        generation: number
+      ): Promise<void>;
     };
     const originalStart = internals.start.bind(sdk);
     let releaseStart!: () => void;
     const startGate = new Promise<void>((resolve) => {
       releaseStart = resolve;
     });
-    jest.spyOn(internals, 'start').mockImplementation(async (config) => {
-      await startGate;
-      await originalStart(config);
-    });
+    jest
+      .spyOn(internals, 'start')
+      .mockImplementation(async (config, generation) => {
+        await startGate;
+        await originalStart(config, generation);
+      });
 
     const initialization = sdk.initialize(integrationConfig());
     const firstShutdown = sdk.shutdown(1_000);
@@ -255,8 +268,10 @@ describe('ElvenObservabilitySdk OTLP integration', () => {
     await sdk.initialize(configuration);
     await expect(sdk.initialize(configuration)).resolves.toBe(sdk);
 
-    sdk.context.setUser({ id: 'user-42', attributes: { role: 'buyer' } });
-    sdk.context.setTenant({ id: 'tenant-42', attributes: { plan: 'pro' } });
+    await sdk.setIdentity({
+      user: { id: 'user-42', attributes: { role: 'buyer' } },
+      tenant: { id: 'tenant-42', attributes: { plan: 'pro' } },
+    });
     sdk.context.setSession('session-42', { source: 'test' });
     sdk.context.setBusinessContext({ 'cart.type': 'express' });
     sdk.logs.debug('debug');
@@ -339,7 +354,7 @@ describe('ElvenObservabilitySdk OTLP integration', () => {
     sdk.context.setTenant(null);
     sdk.context.setSession(null);
     sdk.context.setBusinessContext(null);
-    sdk.context.clear();
+    await sdk.setIdentity({ user: null, tenant: null });
 
     expect(sdk.health().state).toBe('started');
     await expect(sdk.flush(2_000)).resolves.toEqual(

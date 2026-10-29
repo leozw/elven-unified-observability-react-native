@@ -71,6 +71,9 @@ internal object ElvenNativeRuntime {
 
   @Volatile private var application: Application? = null
   @Volatile private var initialized = false
+  @Volatile private var sessionId: String? = null
+  @Volatile private var queueProvenance: String = ""
+  private val closedSessions = mutableSetOf<String>()
   @Volatile private var generation = 0L
   @Volatile private var diagnosticsEnabled = false
   @Volatile private var maxEventQueueSize = 128
@@ -106,7 +109,15 @@ internal object ElvenNativeRuntime {
       callback(platformContext(reactContext).toString())
       return
     }
+    val requestedSession = runCatching { org.json.JSONObject(configurationJson).optString("sessionId") }.getOrDefault("")
+    if (requestedSession.isEmpty() || requestedSession.length > 128 || closedSessions.contains(requestedSession) ||
+      (sessionId != null && sessionId != requestedSession)) {
+      callback("{}")
+      return
+    }
     stopInstrumentation()
+    sessionId = requestedSession
+    queueProvenance = runCatching { org.json.JSONObject(configurationJson).optString("queueProvenance") }.getOrDefault("")
     application = app
     val config = NativeConfig.parse(configurationJson)
     diagnosticsEnabled = config.diagnosticsEnabled
@@ -117,7 +128,7 @@ internal object ElvenNativeRuntime {
     if (config.captureNativeCrashes) {
       restorePreviousCrash(app)
     } else {
-      File(app.noBackupFilesDir, CRASH_FILE).delete()
+      deleteAtomicFile(File(app.noBackupFilesDir, CRASH_FILE))
     }
     if (config.captureLifecycle) startLifecycle(app, activeGeneration)
     if (config.captureNativeCrashes) startCrashHandler(app)
@@ -127,11 +138,37 @@ internal object ElvenNativeRuntime {
   }
 
   @Synchronized
+  fun isSessionActive(id: String): Boolean = initialized && sessionId == id && !closedSessions.contains(id)
+
+  @Synchronized
   fun shutdown(): Boolean {
     stopInstrumentation()
     initialized = false
     traceContext.set(null)
     return true
+  }
+
+  @Synchronized
+  fun closeSession(reactContext: ReactApplicationContext, id: String, purge: Boolean, callback: (Boolean) -> Unit) {
+    closedSessions.add(id)
+    if (closedSessions.size > 64) closedSessions.firstOrNull { it != id }?.let(closedSessions::remove)
+    if (sessionId != null && sessionId != id) { callback(false); return }
+    stopInstrumentation()
+    sessionId = null
+    traceContext.set(null)
+    synchronized(eventLock) { events.clear() }
+    // Cold-denied startup has not initialized collection, but must still erase old files.
+    val app = application ?: reactContext.applicationContext as? Application
+    mainHandler.post { ioExecutor.execute {
+      synchronized(fileLock) {
+        if (sessionId != null) { callback(false); return@synchronized }
+        if (!purge) { callback(true); return@synchronized }
+        if (app == null) { callback(false); return@synchronized }
+        val queueCleared = deleteAtomicFile(queueFile(app))
+        val crashCleared = deleteAtomicFile(File(app.noBackupFilesDir, CRASH_FILE))
+        callback(queueCleared && crashCleared)
+      }
+    } }
   }
 
   fun setDiagnosticsEnabled(enabled: Boolean) {
@@ -155,12 +192,14 @@ internal object ElvenNativeRuntime {
   }
 
   fun readPersistedQueue(callback: (String) -> Unit) {
+    val readingSession = sessionId
     val app = application
     if (app == null) {
       callback("")
       return
     }
     ioExecutor.execute {
+      if (!initialized || readingSession != sessionId) { callback(""); return@execute }
       callback(runCatching { readQueueFile(app) }.getOrDefault(""))
     }
   }
@@ -169,27 +208,31 @@ internal object ElvenNativeRuntime {
     val app = application
     if (
       app == null ||
+      value.length > MAX_PERSISTED_QUEUE_BYTES ||
       value.toByteArray(StandardCharsets.UTF_8).size > MAX_PERSISTED_QUEUE_BYTES
     ) {
       callback(false)
       return
     }
+    val writingSession = runCatching { org.json.JSONObject(value).optString("ownerGeneration") }.getOrDefault("")
     ioExecutor.execute {
+      if (!initialized || writingSession != sessionId) { callback(false); return@execute }
       callback(runCatching { writeQueueFile(app, value) }.getOrDefault(false))
     }
   }
 
   fun clearPersistedQueue(callback: (Boolean) -> Unit) {
+    val clearingSession = sessionId
     val app = application
     if (app == null) {
       callback(false)
       return
     }
     ioExecutor.execute {
+      if (!initialized || clearingSession != sessionId) { callback(false); return@execute }
       callback(
         synchronized(fileLock) {
-          val file = queueFile(app)
-          !file.exists() || file.delete()
+          deleteAtomicFile(queueFile(app))
         }
       )
     }
@@ -230,7 +273,7 @@ internal object ElvenNativeRuntime {
         enqueueEvent(
           "lifecycle",
           "app.activity.created",
-          attributes = mapOf("activity.name" to activity.javaClass.simpleName)
+          attributes = mapOf("activity.name" to activity.javaClass.simpleName), expectedGeneration = activeGeneration
         )
       }
 
@@ -245,7 +288,7 @@ internal object ElvenNativeRuntime {
             framePeriodStartedAt = SystemClock.elapsedRealtime()
             framePeriodStartedUnixMillis = System.currentTimeMillis()
           }
-          enqueueEvent("lifecycle", "app.foreground")
+          enqueueEvent("lifecycle", "app.foreground", expectedGeneration = activeGeneration)
         }
       }
 
@@ -255,7 +298,7 @@ internal object ElvenNativeRuntime {
         if (startedActivities == 0 && !activity.isChangingConfigurations) {
           foreground = false
           flushFrameMetrics()
-          enqueueEvent("lifecycle", "app.background")
+          enqueueEvent("lifecycle", "app.background", expectedGeneration = activeGeneration)
         }
       }
 
@@ -273,13 +316,13 @@ internal object ElvenNativeRuntime {
         enqueueEvent(
           "memory",
           "app.memory.trim",
-          attributes = mapOf("memory.trim.level" to level)
+          attributes = mapOf("memory.trim.level" to level), expectedGeneration = activeGeneration
         )
       }
 
       override fun onLowMemory() {
         if (!isGenerationActive(activeGeneration)) return
-        enqueueEvent("memory", "app.memory.low")
+        enqueueEvent("memory", "app.memory.low", expectedGeneration = activeGeneration)
       }
 
       override fun onConfigurationChanged(configuration: Configuration) = Unit
@@ -289,7 +332,7 @@ internal object ElvenNativeRuntime {
   }
 
   private fun startCrashHandler(app: Application) {
-    val handler = CrashHandler(app, Thread.getDefaultUncaughtExceptionHandler())
+    val handler = CrashHandler(app, Thread.getDefaultUncaughtExceptionHandler(), generation, sessionId, queueProvenance)
     crashHandler = handler
     Thread.setDefaultUncaughtExceptionHandler(handler)
   }
@@ -326,7 +369,7 @@ internal object ElvenNativeRuntime {
             "error",
             "app.anr",
             blockedMillis,
-            mapOf("exception.stacktrace" to stack)
+            mapOf("exception.stacktrace" to stack), expectedGeneration = activeGeneration
           )
         }
         if (thread.isAlive && isGenerationActive(activeGeneration)) {
@@ -359,7 +402,7 @@ internal object ElvenNativeRuntime {
                 "performance",
                 "app.first_frame",
                 duration,
-                timestampUnixMillis = processStartUnixMillis
+                timestampUnixMillis = processStartUnixMillis, expectedGeneration = activeGeneration
               )
             }
           } else {
@@ -423,9 +466,10 @@ internal object ElvenNativeRuntime {
     durationMillis: Long? = null,
     attributes: Map<String, Any?> = emptyMap(),
     timestampUnixMillis: Long = System.currentTimeMillis(),
-    eventTraceContext: Pair<String, String>? = traceContext.get()
+    eventTraceContext: Pair<String, String>? = traceContext.get(),
+    expectedGeneration: Long = generation
   ) {
-    if (!initialized) return
+    if (!isGenerationActive(expectedGeneration)) return
     val event = org.json.JSONObject()
       .put("id", UUID.randomUUID().toString())
       .put("type", type)
@@ -439,6 +483,7 @@ internal object ElvenNativeRuntime {
       event.put("spanId", spanId)
     }
     synchronized(eventLock) {
+      if (!isGenerationActive(expectedGeneration)) return
       while (events.size >= maxEventQueueSize) events.removeFirst()
       events.addLast(event.toString())
     }
@@ -447,6 +492,7 @@ internal object ElvenNativeRuntime {
   private fun sanitizeAttributes(attributes: Map<String, Any?>): org.json.JSONObject {
     val output = org.json.JSONObject()
     attributes.entries.take(MAX_EVENT_ATTRIBUTE_COUNT).forEach { (rawKey, rawValue) ->
+      if (rawKey.length > 128) return@forEach
       val key = rawKey.take(128)
       val value = if (isSensitiveKey(key)) "[REDACTED]" else sanitizeValue(rawValue)
       if (value != null) output.put(key, value)
@@ -457,10 +503,12 @@ internal object ElvenNativeRuntime {
   private fun sanitizeValue(value: Any?): Any? = when (value) {
     null -> null
     is Boolean, is Int, is Long, is Float, is Double -> value
-    else -> redactText(value.toString()).take(MAX_ATTRIBUTE_LENGTH)
+    is String -> redactText(value).take(MAX_ATTRIBUTE_LENGTH)
+    else -> "[Unsupported]"
   }
 
   private fun redactText(value: String): String {
+    if (value.length > 65_536) return "[OVERSIZE]"
     var redacted = urlUserInfo.replace(value, "\$1[REDACTED]@")
     redacted = authorizationValue.replace(redacted, "\$1 [REDACTED]")
     redacted = jwtValue.replace(redacted, "[REDACTED]")
@@ -480,9 +528,12 @@ internal object ElvenNativeRuntime {
   private fun restorePreviousCrash(app: Application) {
     val file = File(app.noBackupFilesDir, CRASH_FILE)
     if (!file.exists()) return
+    if (file.length() > 131_072) { file.delete(); return }
     runCatching {
-      val value = AtomicFile(file).openRead().bufferedReader().use { it.readText() }
-      if (value.length <= MAX_PERSISTED_QUEUE_BYTES) {
+      val raw = AtomicFile(file).openRead().bufferedReader().use { it.readText() }
+      val envelope = org.json.JSONObject(raw)
+      val value = envelope.getJSONObject("event").toString()
+      if (envelope.optString("provenance") == queueProvenance && queueProvenance.length == 64 && value.length <= 131_072) {
         synchronized(eventLock) {
           while (events.size >= maxEventQueueSize) events.removeFirst()
           events.addLast(value)
@@ -505,6 +556,7 @@ internal object ElvenNativeRuntime {
       }
     }
     return org.json.JSONObject()
+      .put("sessionId", sessionId ?: "")
       .put("platform", "android")
       .put("osVersion", Build.VERSION.RELEASE ?: "unknown")
       .put("deviceModel", "${Build.MANUFACTURER} ${Build.MODEL}".trim().take(128))
@@ -578,6 +630,15 @@ internal object ElvenNativeRuntime {
 
   private fun queueFile(app: Application): File = File(app.noBackupFilesDir, QUEUE_FILE)
 
+  private fun deleteAtomicFile(file: File): Boolean = runCatching {
+    AtomicFile(file).delete()
+    val legacyBackup = File(file.path + ".bak")
+    val pendingWrite = File(file.path + ".new")
+    if (legacyBackup.exists()) legacyBackup.delete()
+    if (pendingWrite.exists()) pendingWrite.delete()
+    !file.exists() && !legacyBackup.exists() && !pendingWrite.exists()
+  }.getOrDefault(false)
+
   private fun calculateProcessStartUnixMillis(): Long {
     val elapsed = max(
       0L,
@@ -608,10 +669,14 @@ internal object ElvenNativeRuntime {
 
   private class CrashHandler(
     private val app: Application,
-    val previous: Thread.UncaughtExceptionHandler?
+    val previous: Thread.UncaughtExceptionHandler?,
+    private val capturedGeneration: Long,
+    private val capturedSession: String?,
+    private val capturedProvenance: String
   ) : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(thread: Thread, throwable: Throwable) {
       try {
+        if (!isGenerationActive(capturedGeneration) || sessionId != capturedSession) return
         val event = org.json.JSONObject()
           .put("id", UUID.randomUUID().toString())
           .put("type", "crash")
@@ -624,7 +689,9 @@ internal object ElvenNativeRuntime {
                 "exception.type" to throwable.javaClass.name,
                 "exception.message" to (throwable.message ?: "Native crash"),
                 "exception.stacktrace" to
-                  Log.getStackTraceString(throwable).take(MAX_STACK_LENGTH),
+                  throwable.stackTrace.take(64).joinToString("\n") {
+                    "${it.className.take(128)}.${it.methodName.take(128)}(${it.fileName?.take(128)}:${it.lineNumber})"
+                  }.take(MAX_STACK_LENGTH),
                 "thread.name" to thread.name
               )
             )
@@ -632,15 +699,19 @@ internal object ElvenNativeRuntime {
         traceContext.get()?.let { (traceId, spanId) ->
           event.put("traceId", traceId).put("spanId", spanId)
         }
+        synchronized(fileLock) {
+        if (!isGenerationActive(capturedGeneration) || sessionId != capturedSession) return
         val atomicFile = AtomicFile(File(app.noBackupFilesDir, CRASH_FILE))
         var stream: java.io.FileOutputStream? = null
         try {
           stream = atomicFile.startWrite()
-          stream.write(event.toString().toByteArray(StandardCharsets.UTF_8))
+          val envelope = org.json.JSONObject().put("provenance", capturedProvenance).put("event", event)
+          stream.write(envelope.toString().toByteArray(StandardCharsets.UTF_8))
           stream.fd.sync()
           atomicFile.finishWrite(stream)
         } catch (_: Exception) {
           stream?.let(atomicFile::failWrite)
+        }
         }
       } catch (_: Throwable) {
         // Crash capture must preserve the platform crash path.
